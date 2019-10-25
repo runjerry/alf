@@ -94,6 +94,11 @@ class OffPolicyAlgorithm(RLAlgorithm):
         """Return experience replayer."""
         return self._exp_replayer
 
+    def observe(self, exp: Experience):
+        """An algorithm can override this to manipulate experience."""
+        for observer in self._exp_observers:
+            observer(exp)
+
     def predict(self, time_step: ActionTimeStep, state=None):
         """Default implementation of predict.
 
@@ -220,8 +225,8 @@ class OffPolicyAlgorithm(RLAlgorithm):
         """
         return experience
 
-    def prepare_exp_replayer(self, exp_replayer: str):
-        """Prepare experience replayer."""
+    def set_exp_replayer(self, exp_replayer: str):
+        """Set experience replayer."""
 
         if exp_replayer == "one_time":
             self._exp_replayer = OnetimeExperienceReplayer()

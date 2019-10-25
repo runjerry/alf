@@ -168,8 +168,7 @@ class PolicyDriver(driver.Driver):
                 policy_step._replace(action=action),
                 action_distribution=action_distribution_param,
                 state=policy_state if self._use_rollout_state else ())
-            for observer in self._algorithm.exp_observers:
-                observer(exp)
+            self._algorithm.observe(exp)
 
         return next_time_step, policy_step, action, transformed_time_step
 
