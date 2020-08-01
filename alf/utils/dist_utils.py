@@ -218,11 +218,7 @@ def _builder_transformed(base_builder, transforms, **kwargs):
 
 def _get_builder(obj):
     if type(obj) == td.Categorical:
-        if 'probs' in obj.__dict__ and id(obj.probs) == id(obj._param):
-            # This means that obj is constructed using probs
-            return td.Categorical, {'probs': obj.probs}
-        else:
-            return td.Categorical, {'logits': obj.logits}
+        return td.Categorical, {'logits': obj.logits}
     elif type(obj) == td.Normal:
         return td.Normal, {'loc': obj.mean, 'scale': obj.stddev}
     elif type(obj) == td.Independent:

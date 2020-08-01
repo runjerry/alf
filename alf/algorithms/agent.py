@@ -166,10 +166,6 @@ class Agent(OnPolicyAlgorithm):
         self._irm = intrinsic_reward_module
         self._goal_generator = goal_generator
         self._agent_helper = agent_helper
-        # Set ``use_rollout_state``` for all submodules using the setter.
-        # Need to make sure that no submodules use ``self._use_rollout_state``
-        # before this line.
-        self.use_rollout_state = self.use_rollout_state
 
     def is_on_policy(self):
         return self._is_on_policy

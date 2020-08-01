@@ -183,8 +183,7 @@ class SyncExperienceReplayer(ExperienceReplayer):
                  experience_spec,
                  batch_size,
                  max_length,
-                 prioritized_sampling=False,
-                 name="SyncExperienceReplayer"):
+                 prioritized_sampling=False):
         """Create a ReplayBuffer.
 
         Args:
@@ -201,8 +200,7 @@ class SyncExperienceReplayer(ExperienceReplayer):
             experience_spec,
             batch_size,
             max_length=max_length,
-            prioritized_sampling=prioritized_sampling,
-            name=name)
+            prioritized_sampling=prioritized_sampling)
         self._data_iter = None
 
     def observe(self, exp):

@@ -64,7 +64,6 @@ class CriticNetwork(Network):
 
     def __init__(self,
                  input_tensor_spec,
-                 output_tensor_spec=TensorSpec(()),
                  observation_input_processors=None,
                  observation_preprocessing_combiner=None,
                  observation_conv_layer_params=None,
@@ -81,7 +80,6 @@ class CriticNetwork(Network):
         Args:
             input_tensor_spec: A tuple of ``TensorSpec``s ``(observation_spec, action_spec)``
                 representing the inputs.
-            output_tensor_spec (TensorSpec): spec for the output
             observation_input_preprocessors (nested InputPreprocessor): a nest of
                 ``InputPreprocessor``, each of which will be applied to the
                 corresponding observation input.
@@ -151,12 +149,12 @@ class CriticNetwork(Network):
             fc_layer_params=joint_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
-            last_layer_size=output_tensor_spec.numel,
+            last_layer_size=1,
             last_activation=math_ops.identity,
             last_kernel_initializer=last_kernel_initializer,
             name=self.name + ".joint_encoder")
 
-        self._output_spec = output_tensor_spec
+        self._output_spec = TensorSpec(())
 
     def forward(self, inputs, state=()):
         """Computes action-value given an observation.
@@ -176,9 +174,7 @@ class CriticNetwork(Network):
         encoded_action, _ = self._action_encoder(actions)
         joint = torch.cat([encoded_obs, encoded_action], -1)
         action_value, _ = self._joint_encoder(joint)
-        action_value = action_value.reshape(action_value.shape[0],
-                                            *self._output_spec.shape)
-        return action_value, state
+        return torch.squeeze(action_value, -1), state
 
     def make_parallel(self, n):
         """Create a ``ParallelCriticNetwork`` using ``n`` replicas of ``self``.
@@ -208,8 +204,7 @@ class ParallelCriticNetwork(Network):
         self._obs_encoder = critic_network._obs_encoder.make_parallel(n)
         self._action_encoder = critic_network._action_encoder.make_parallel(n)
         self._joint_encoder = critic_network._joint_encoder.make_parallel(n)
-        self._output_spec = TensorSpec((n, ) +
-                                       critic_network.output_spec.shape)
+        self._output_spec = TensorSpec((n, ))
 
     def forward(self, inputs, state=()):
         """Computes action-value given an observation.
@@ -230,9 +225,7 @@ class ParallelCriticNetwork(Network):
         encoded_action, _ = self._action_encoder(actions)
         joint = torch.cat([encoded_obs, encoded_action], -1)
         action_value, _ = self._joint_encoder(joint)
-        action_value = action_value.reshape(action_value.shape[0],
-                                            *self._output_spec.shape)
-        return action_value, state
+        return torch.squeeze(action_value, -1), state
 
 
 @gin.configurable
@@ -246,7 +239,6 @@ class CriticRNNNetwork(Network):
 
     def __init__(self,
                  input_tensor_spec,
-                 output_tensor_spec=TensorSpec(()),
                  observation_input_processors=None,
                  observation_preprocessing_combiner=None,
                  observation_conv_layer_params=None,
@@ -265,7 +257,6 @@ class CriticRNNNetwork(Network):
         Args:
             input_tensor_spec: A tuple of ``TensorSpec``s ``(observation_spec, action_spec)``
                 representing the inputs.
-            ourput_tensor_spec (TensorSpec): spec for the output
             observation_input_preprocessors (nested InputPreprocessor): a nest of
                 ``InputPreprocessor``, each of which will be applied to the
                 corresponding observation input.
@@ -345,11 +336,11 @@ class CriticRNNNetwork(Network):
             post_fc_layer_params=critic_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
-            last_layer_size=output_tensor_spec.numel,
+            last_layer_size=1,
             last_activation=math_ops.identity,
             last_kernel_initializer=last_kernel_initializer)
 
-        self._output_spec = output_tensor_spec
+        self._output_spec = TensorSpec(())
 
     def forward(self, inputs, state):
         """Computes action-value given an observation.
@@ -370,9 +361,7 @@ class CriticRNNNetwork(Network):
         joint = torch.cat([encoded_obs, encoded_action], -1)
         encoded_joint, _ = self._joint_encoder(joint)
         action_value, state = self._lstm_encoding_net(encoded_joint, state)
-        action_value = action_value.reshape(action_value.shape[0],
-                                            *self._output_spec.shape)
-        return action_value, state
+        return torch.squeeze(action_value, -1), state
 
     @property
     def state_spec(self):

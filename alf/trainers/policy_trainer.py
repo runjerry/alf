@@ -90,8 +90,6 @@ class Trainer(object):
             config (TrainerConfig): configuration used to construct this trainer
         """
         root_dir = os.path.expanduser(config.root_dir)
-        os.makedirs(root_dir, exist_ok=True)
-        logging.get_absl_handler().use_absl_log_file(log_dir=root_dir)
         self._root_dir = root_dir
         self._train_dir = os.path.join(root_dir, 'train')
         self._eval_dir = os.path.join(root_dir, 'eval')
@@ -307,9 +305,7 @@ class Trainer(object):
         global_step = alf.summary.get_global_counter()
         self._checkpointer.save(global_step=global_step)
 
-    @common.mark_eval
     def _eval(self):
-        self._algorithm.eval()
         time_step = common.get_initial_time_step(self._eval_env)
         policy_state = self._algorithm.get_initial_predict_state(
             self._eval_env.batch_size)
@@ -333,7 +329,6 @@ class Trainer(object):
                     step_metrics=step_metrics)
 
         common.log_metrics(self._eval_metrics)
-        self._algorithm.train()
 
 
 @torch.no_grad()
@@ -342,8 +337,10 @@ def _step(algorithm, env, time_step, policy_state, epsilon_greedy, metrics):
         policy_state, algorithm.get_initial_predict_state(env.batch_size),
         time_step.is_first())
     transformed_time_step = algorithm.transform_timestep(time_step)
+    algorithm.eval()
     policy_step = algorithm.predict_step(transformed_time_step, policy_state,
                                          epsilon_greedy)
+    algorithm.train(True)
     next_time_step = env.step(policy_step.output)
     for metric in metrics:
         metric(time_step.cpu())
@@ -404,7 +401,6 @@ def play(root_dir,
     if recorder:
         recorder.capture_frame()
     time_step = common.get_initial_time_step(env)
-    algorithm.eval()
     policy_state = algorithm.get_initial_predict_state(env.batch_size)
     episode_reward = 0.
     episode_length = 0

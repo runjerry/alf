@@ -41,8 +41,7 @@ class ThreadEnvironmentTest(alf.test.TestCase):
                                                 minimum=-1.0,
                                                 maximum=1.0)
         self.time_step_spec = ds.time_step_spec(self.observation_spec,
-                                                self.action_spec,
-                                                ts.TensorSpec(()))
+                                                self.action_spec)
 
     def _make_thread_environment(self, constructor=None):
         self._set_default_specs()

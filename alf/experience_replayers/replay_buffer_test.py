@@ -37,6 +37,7 @@ class ReplayBufferTest(RingBufferTest):
             "hindsight_relabel_fn.her_proportion=0.8",
             'hindsight_relabel_fn.achieved_goal_field="o.a"',
             'hindsight_relabel_fn.desired_goal_field="o.g"',
+            'hindsight_relabel_fn.reward_field="r"',
             "ReplayBuffer.postprocess_exp_fn=@hindsight_relabel_fn",
         ]
         gin.parse_config_files_and_bindings("", configs)
@@ -46,8 +47,7 @@ class ReplayBufferTest(RingBufferTest):
             num_environments=2,
             max_length=self.max_length,
             keep_episodic_info=True,
-            step_type_field="t",
-            with_replacement=True)
+            step_type_field="t")
 
         steps = [
             [
@@ -105,7 +105,7 @@ class ReplayBufferTest(RingBufferTest):
 
         # Save original exp for later testing.
         g_orig = replay_buffer._buffer.o["g"].clone()
-        r_orig = replay_buffer._buffer.reward.clone()
+        r_orig = replay_buffer._buffer.r.clone()
 
         # HER selects indices [0, 2, 3, 4] to relabel, from all 5:
         # env_ids: [[0, 0], [1, 1], [0, 0], [1, 1], [0, 0]]
@@ -125,7 +125,7 @@ class ReplayBufferTest(RingBufferTest):
         self.assertEqual(list(res.o["g"].shape), [5, 2])
 
         # Test relabeling doesn't change original experience
-        self.assertTrue(torch.allclose(r_orig, replay_buffer._buffer.reward))
+        self.assertTrue(torch.allclose(r_orig, replay_buffer._buffer.r))
         self.assertTrue(torch.allclose(g_orig, replay_buffer._buffer.o["g"]))
 
         # test relabeled goals
@@ -135,7 +135,7 @@ class ReplayBufferTest(RingBufferTest):
         # test relabeled rewards
         r = torch.tensor([[-1., 0.], [-1., -1.], [-1., 0.], [-1., 0.],
                           [-1., 0.]])
-        self.assertTrue(torch.allclose(res.reward, r))
+        self.assertTrue(torch.allclose(res.r, r))
 
     # Gold standard functions to test HER.
     def episode_end_indices(self, b):
@@ -226,6 +226,7 @@ class ReplayBufferTest(RingBufferTest):
             "hindsight_relabel_fn.her_proportion=0.8",
             'hindsight_relabel_fn.achieved_goal_field="o.a"',
             'hindsight_relabel_fn.desired_goal_field="o.g"',
+            'hindsight_relabel_fn.reward_field="r"',
             "ReplayBuffer.postprocess_exp_fn=@hindsight_relabel_fn",
         ]
         gin.parse_config_files_and_bindings("", configs)
@@ -274,7 +275,7 @@ class ReplayBufferTest(RingBufferTest):
 
                 # Save original exp for later testing.
                 g_orig = replay_buffer._buffer.o["g"].clone()
-                r_orig = replay_buffer._buffer.reward.clone()
+                r_orig = replay_buffer._buffer.r.clone()
 
                 # HER relabel experience
                 res = replay_buffer.get_batch(sample_steps, 2)[0]
@@ -283,7 +284,7 @@ class ReplayBufferTest(RingBufferTest):
 
                 # Test relabeling doesn't change original experience
                 self.assertTrue(
-                    torch.allclose(r_orig, replay_buffer._buffer.reward))
+                    torch.allclose(r_orig, replay_buffer._buffer.r))
                 self.assertTrue(
                     torch.allclose(g_orig, replay_buffer._buffer.o["g"]))
                 self.assertTrue(
@@ -292,12 +293,11 @@ class ReplayBufferTest(RingBufferTest):
                     torch.all(idx_headless_orig == replay_buffer.
                               _headless_indexed_pos))
 
-    @parameterized.parameters([
-        (False, False),
-        (False, True),
-        (True, False),
+    @parameterized.named_parameters([
+        ('test_sync', False),
+        ('test_async', True),
     ])
-    def test_replay_buffer(self, allow_multiprocess, with_replacement):
+    def test_replay_buffer(self, allow_multiprocess):
         replay_buffer = ReplayBuffer(
             data_spec=self.data_spec,
             num_environments=self.num_envs,
@@ -406,35 +406,6 @@ class ReplayBufferTest(RingBufferTest):
         # Test clear()
         replay_buffer.clear()
         self.assertEqual(replay_buffer.total_size, 0)
-
-    def test_recent_data_and_without_replacement(self):
-        num_envs = 4
-        max_length = 100
-        replay_buffer = ReplayBuffer(
-            data_spec=self.data_spec,
-            num_environments=num_envs,
-            max_length=max_length,
-            with_replacement=False,
-            recent_data_ratio=0.5,
-            recent_data_steps=4)
-        replay_buffer.add_batch(get_batch([0, 1, 2, 3], self.dim, t=0, x=0.))
-        batch, info = replay_buffer.get_batch(4, 1)
-        self.assertEqual(info.env_ids, torch.tensor([0, 1, 2, 3]))
-
-        replay_buffer.add_batch(get_batch([0, 1, 2, 3], self.dim, t=1, x=1.0))
-        batch, info = replay_buffer.get_batch(8, 1)
-        self.assertEqual(info.env_ids, torch.tensor([0, 1, 2, 3] * 2))
-
-        for t in range(2, 32):
-            replay_buffer.add_batch(
-                get_batch([0, 1, 2, 3], self.dim, t=t, x=t))
-        batch, info = replay_buffer.get_batch(32, 1)
-        self.assertEqual(info.env_ids[16:], torch.tensor([0, 1, 2, 3] * 4))
-        # The first half is from recent data
-        self.assertEqual(info.env_ids[:16], torch.tensor([0, 1, 2, 3] * 4))
-        self.assertEqual(
-            info.positions[:16],
-            torch.tensor([28] * 4 + [29] * 4 + [30] * 4 + [31] * 4))
 
     def test_prioritized_replay(self):
         replay_buffer = ReplayBuffer(

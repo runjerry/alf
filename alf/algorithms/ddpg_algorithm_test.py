@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from absl import logging
-from absl.testing import parameterized
 import functools
 import torch
 import torch.distributions as td
@@ -32,9 +31,8 @@ from alf.utils import common, dist_utils, tensor_utils
 from alf.utils.math_ops import clipped_exp
 
 
-class DDPGAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
-    @parameterized.parameters((1, 1), (2, 3))
-    def test_ddpg_algorithm(self, num_critic_replicas, reward_dim):
+class DDPGAlgorithmTest(alf.test.TestCase):
+    def test_ddpg_algorithm(self):
         num_env = 128
         num_eval_env = 100
         steps_per_episode = 13
@@ -51,16 +49,10 @@ class DDPGAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
         env_class = PolicyUnittestEnv
 
         env = env_class(
-            num_env,
-            steps_per_episode,
-            action_type=ActionType.Continuous,
-            reward_dim=reward_dim)
+            num_env, steps_per_episode, action_type=ActionType.Continuous)
 
         eval_env = env_class(
-            num_eval_env,
-            steps_per_episode,
-            action_type=ActionType.Continuous,
-            reward_dim=reward_dim)
+            num_eval_env, steps_per_episode, action_type=ActionType.Continuous)
 
         obs_spec = env._observation_spec
         action_spec = env._action_spec
@@ -71,20 +63,15 @@ class DDPGAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
             ActorNetwork, fc_layer_params=fc_layer_params)
 
         critic_network = functools.partial(
-            CriticNetwork,
-            output_tensor_spec=env.reward_spec(),
-            joint_fc_layer_params=fc_layer_params)
+            CriticNetwork, joint_fc_layer_params=fc_layer_params)
 
         alg = DdpgAlgorithm(
             observation_spec=obs_spec,
             action_spec=action_spec,
             actor_network_ctor=actor_network,
             critic_network_ctor=critic_network,
-            reward_weights=[1, 2, 3],
             env=env,
             config=config,
-            num_critic_replicas=num_critic_replicas,
-            use_parallel_network=num_critic_replicas > 1,
             actor_optimizer=alf.optimizers.Adam(lr=1e-2),
             critic_optimizer=alf.optimizers.Adam(lr=1e-2),
             debug_summaries=False,

@@ -397,7 +397,7 @@ def termination(observation, prev_action, reward, env_id=None, env_info={}):
             env_info=env_info)
 
 
-def time_step_spec(observation_spec, action_spec, reward_spec):
+def time_step_spec(observation_spec, action_spec):
     """Returns a ``TimeStep`` spec given the ``observation_spec`` and the
     ``action_spec``.
     """
@@ -409,7 +409,7 @@ def time_step_spec(observation_spec, action_spec, reward_spec):
     assert all(map(is_valid_tensor_spec, nest.flatten(action_spec)))
     return TimeStep(
         step_type=ts.TensorSpec([], torch.int32),
-        reward=reward_spec,
+        reward=ts.TensorSpec([], torch.float32),
         discount=ts.BoundedTensorSpec([],
                                       torch.float32,
                                       minimum=0.0,

@@ -22,7 +22,6 @@ import alf
 nest_map = alf.nest.map_structure
 
 
-@gin.configurable
 def identity(x):
     """PyTorch doesn't have an identity activation. This can be used as a
     placeholder.

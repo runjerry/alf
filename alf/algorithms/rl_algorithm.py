@@ -213,16 +213,8 @@ class RLAlgorithm(Algorithm):
 
     def summarize_reward(self, name, rewards):
         if self._debug_summaries:
-            assert 2 <= rewards.ndim <= 3, (
-                "The shape of rewards should be [T, B] or [T, B, k]")
-            if rewards.ndim == 2:
-                alf.summary.histogram(name + "/value", rewards)
-                alf.summary.scalar(name + "/mean", torch.mean(rewards))
-            else:
-                for i in range(rewards.shape[2]):
-                    r = rewards[..., i]
-                    alf.summary.histogram('%s/%s/value' % (name, i), r)
-                    alf.summary.scalar('%s/%s/mean' % (name, i), torch.mean(r))
+            alf.summary.histogram(name + "/value", rewards)
+            alf.summary.scalar(name + "/mean", torch.mean(rewards))
 
     def summarize_rollout(self, experience):
         """Generate summaries for rollout.
@@ -269,6 +261,7 @@ class RLAlgorithm(Algorithm):
         if self._debug_summaries:
             summary_utils.summarize_action(experience.action,
                                            self._action_spec)
+            summary_utils.summarize_loss(loss_info)
 
         if self._config.summarize_action_distributions:
             field = alf.nest.find_field(train_info, 'action_distribution')
@@ -418,7 +411,6 @@ class RLAlgorithm(Algorithm):
                 reward=self._reward_shaping_fn(time_step.reward))
         return time_step
 
-    @common.mark_rollout
     def unroll(self, unroll_length):
         r"""Unroll ``unroll_length`` steps using the current policy.
 
