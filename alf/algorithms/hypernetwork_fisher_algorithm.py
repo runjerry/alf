@@ -180,14 +180,18 @@ class HyperNetworkFisher(Generator):
                 name="Generator")
             optimizer=net.default_optimizer
 
-        disc_fc_params = (100, 100)
+        disc_fc_params = (32, 32)
+        print (gen_output_dim)
         disc_net = EncodingNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
                 fc_layer_params=disc_fc_params,
+                activation=torch.nn.functional.relu,
                 last_layer_size=gen_output_dim,
                 last_activation=math_ops.identity,
                 name="Critic")
+        disc_net.apply(self._spectral_norm)
+        
 
         if print_network:
             print("Generated network")
@@ -292,12 +296,8 @@ class HyperNetworkFisher(Generator):
                 target = target.to(alf.get_default_device())
                 if batch_idx % self._d_iters:
                     model = 'critic'
-                    self._disc_net.train()
-                    self._net.eval()
                 else:
                     model = 'generator'
-                    self._disc_net.eval()
-                    self._net.train()
 
                 alg_step = self.train_step(
                         (data, target),
@@ -343,6 +343,18 @@ class HyperNetworkFisher(Generator):
         """
         if loss_func is None:
             loss_func = self._loss_func
+
+        assert model in ['generator', 'critic'], "argument ``model`` is " \
+            "required to be either ``generator`` or ``critic``, got " \
+            "{}".format(model)
+
+        if model == 'critic':
+            for param in self._disc_net.parameters():
+                param.requires_grad = True
+        elif model == 'generator':
+            for param in self._disc_net.parameters():
+                param.requires_grad = False
+        
         if self._regenerate_for_each_batch:
             params = self.sample_parameters(particles=particles)
         else:
@@ -358,17 +370,18 @@ class HyperNetworkFisher(Generator):
             output=params,
             state=(),
             info=LossInfo(loss=loss_propagated, extra=train_info))
-
+    
     def _approx_jacobian_trace(self, critic_out, params):
+        """Hutchinson's trace Jacobian estimator O(1) call to autograd"""
         eps = torch.randn_like(critic_out)
-        eps_dfdx = torch.autograd.grad(
+        jvp = torch.autograd.grad(
                 critic_out,
                 params,
                 grad_outputs=eps,
                 retain_graph=True,
                 create_graph=True)[0]
-        tr_dfdx = (eps_dfdx * eps)#.sum(-1)
-        return tr_dfdx
+        tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
+        return tr_jvp
 
     def _exact_jacobian_trace(self, fx, x):
         vals = []
@@ -383,6 +396,10 @@ class HyperNetworkFisher(Generator):
             vals.append(dfxi_dxi)
         vals = torch.cat(vals, dim=1)
         return vals.sum(dim=1)
+    
+    def _spectral_norm(self, module):
+        if 'weight' in module._parameters:
+            torch.nn.utils.spectral_norm(module)
 
     def _fisher_loss(self, inputs, params, loss_func, model):
         """compute particle loss in L2 space (fisher-ns)"""
@@ -393,35 +410,32 @@ class HyperNetworkFisher(Generator):
         target = target.unsqueeze(1).expand(*target.shape[:1], particles,
                 *target.shape[1:])
         loss, extra = self._compute_loss(output, target, loss_func)
-        log_q = torch.autograd.grad(
-                loss.sum(),
-                params,
-                grad_outputs=None,
-                retain_graph=True,
-                create_graph=True)[0]
+        log_q = torch.autograd.grad(loss.sum(), params, retain_graph=True)[0]
+
+        if model == 'critic':
+            log_q = log_q.detach()
 
         critic_samples = self._disc_net(params)[0]  # [n x params]
         log_q_f = (log_q * critic_samples) # [n x params]
+        tr_critic = self._approx_jacobian_trace(critic_samples, params) # [n]
 
-        tr_critic = self._approx_jacobian_trace(critic_samples, params)
-        # print (log_q_f.shape, tr_critic.shape)
+        if model == 'generator':
+            tr_critic = tr_critic.detach()
+            critic_samples = critic_samples.detach()
 
-        stein_pq = log_q_f + tr_critic
-        loss_sq = stein_pq #.mean() # estimate of S(p, q)
+        stein_pq = log_q_f + tr_critic.unsqueeze(1) # [n x params]
+        loss_sq = stein_pq # estimate of S(p, q)
         
-        #print ('stein: ', tr_critic.mean())
-        #print ('loss: ', loss_sq)
+        l2_penalty = (critic_samples * critic_samples) * 10.
+        loss_sq = loss_sq - l2_penalty
+
         if model == 'critic':
-            l2_penalty = (critic_samples * critic_samples) * 1.
-            loss = -1 * loss_sq + l2_penalty
-        elif model == 'generator':
-            loss = loss_sq
-        else:
-            raise ValueError("In fisher loss, incorrect model name supplied "\
-                    "({}), this should never happen".format(model))
+            loss_sq = -1 * loss_sq
+            for p in self._net.parameters():
+                p.requires_grad = False
         
         train_info = HyperNetworkLossInfo(loss=loss, extra=extra)
-        loss_propagated = torch.sum(loss.detach() * params, dim=-1)
+        loss_propagated = torch.sum(loss_sq * params, dim=1)
         
         return train_info, loss_propagated
 

@@ -343,31 +343,6 @@ class HyperNetwork(Generator):
             state=(),
             info=LossInfo(loss=loss_propagated, extra=train_info))
 
-    def _approx_jacobian_trace(self, fx, x):
-        eps = torch.randn_like(fx)
-        eps_dfdx = torch.autograd.grad(
-                fx,
-                x,
-                grad_outputs=eps,
-                retain_graph=True,
-                create_graph=True)[0]
-        tr_dfdx = (eps_dfdx * eps).sum(-1)
-        return tr_dfdx
-
-    def _exact_jacobian_trace(self, fx, x):
-        vals = []
-        for i in range(x.size(1)):
-            fxi = fx[:, i]
-            dfxi_dxi = torch.autograd.grad(
-                    fxi.sum(),
-                    x,
-                    grad_outputs=None,
-                    retain_graph=True,
-                    create_graph=True)[0][:, i][:, None]
-            vals.append(dfxi_dxi)
-        vals = torch.cat(vals, dim=1)
-        return vals.sum(dim=1)
-
     def _stein_grad(self, inputs, params, loss_func):
         """Compute particle gradients via gfsf (stein estimator). """
         data, target = inputs
@@ -386,22 +361,6 @@ class HyperNetwork(Generator):
         loss_propagated = torch.sum(grad.detach() * params, dim=-1)
 
         return train_info, loss_propagated
-
-    def _fisher_grad(self, inputs, params, loss_func):
-        """compute particle gradients in L2 space (fisher-ns)"""
-        data, target = inputs
-        particles = params.shape[0]
-        self._param_net.set_parameters(params)
-        output, _ = self._param_net(data)
-        target = target.unsqueeze(1).expand(*target.shape[:1], particles,
-                *target.shape[1:])
-        loss, extra = self._compute_loss(output, target, loss_func)
-        S_q = torch.autograd.grad(loss.sum(), params)[0]
-        critic_samples = self._disc_net(params)
-        L_Sq = S_q @ critic_samples
-        
-        tr_Sq = self._approx_jacobian_trace(critic_samples, params)
-
 
 
     def _svgd_grad(self, inputs, params, loss_func):

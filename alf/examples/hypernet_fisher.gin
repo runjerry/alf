@@ -9,7 +9,7 @@ create_dataset.test_batch_size=100
 # Lenet for MNIST
 CONV_LAYER_PARAMS=((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
 FC_LAYER_PARAMS = ((84, True), )
-HIDDEN_LAYERS = (32, 32)
+HIDDEN_LAYERS = (256, 256)
 
 hypernet/Adam.lr=1e-4
 hypernet/Adam.weight_decay=1e-4
