@@ -91,7 +91,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         ax[2].set_title('Hypernet Learned Covariance')
         sns.heatmap(learned_cov, ax=ax[2])
         plt.tight_layout()
-        plt.savefig('cov_err.png')
+        plt.savefig('cov_err_{}.png'.format(self._step))
         #plt.show()
         plt.close('all')
 
@@ -123,7 +123,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             inputs.t() @ inputs)  # + torch.eye(input_size))
         true_mean = true_cov @ inputs.t() @ targets
         noise_dim = 3
-        particles = 32
+        particles = 10
         train_batch_size = 100
         # gen_input = torch.randn(particles, noise_dim)
         d_iters = 5
@@ -151,14 +151,17 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         def _train():
             train_inputs = inputs
             train_targets = targets
+            # re-enable grad after stopping during critic training
             for p in algorithm._net.parameters():
                 p.requires_grad = True
+
             if self._step % (d_iters+1):
                 model = 'critic'
                 self._params = algorithm.sample_parameters(noise=self._gen_input)
             else:
                 model = 'generator'
-                self._gen_input = torch.randn(batch_size, noise_dim)
+                #print ('generator')
+                self._gen_input = torch.randn(particles, noise_dim)
                 self._params = algorithm.sample_parameters(noise=self._gen_input)
             
             alg_step = algorithm.train_step(
@@ -218,7 +221,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             print("\tSampled cov err {}".format(scov_err))
             print("learned_cov norm: {}".format(learned_cov.norm()))
             
-            #self.plot_samples(inputs, targets, analytic_preds, sampled_preds)
+            self.plot_samples(inputs, targets, analytic_preds, sampled_preds)
             self.plot_cov(true_cov, analytic_cov, learned_cov)
 
         for i in range(1000000):
