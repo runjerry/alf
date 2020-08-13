@@ -74,14 +74,22 @@ class ParamConvNetTest(parameterized.TestCase, alf.test.TestCase):
     def test_param_network(self, batch_size=1):
         input_spec = TensorSpec((3, 32, 32), torch.float32)
         conv_layer_params = ((16, (2, 2), 1, (1, 0)), (15, 2, (1, 2), 1, 2))
+<<<<<<< HEAD
         fc_layer_params = (128, )
+=======
+        fc_layer_params = ((128, True), )
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
         last_layer_size = 10
         last_activation = math_ops.identity
         network = ParamNetwork(
             input_spec,
             conv_layer_params=conv_layer_params,
             fc_layer_params=fc_layer_params,
+<<<<<<< HEAD
             last_layer_size=last_layer_size,
+=======
+            last_layer_param=(last_layer_size, True),
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
             last_activation=last_activation)
         self.assertLen(network._fc_layers, 2)
 

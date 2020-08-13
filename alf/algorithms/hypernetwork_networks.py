@@ -256,8 +256,13 @@ class ParamNetwork(Network):
         if theta.ndim == 1:
             theta = theta.unsqueeze(0)
         assert (theta.ndim == 2 and theta.shape[1] == self.param_length), (
+<<<<<<< HEAD
             "Input theta has wrong shape {}. Expecting shape (, {})".format(
             theta.shape, self.param_length))
+=======
+            "Input theta has wrong shape %s. Expecting shape (, %d)" %
+            self.param_length)
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
         if self._conv_net is not None:
             split = self._conv_net.param_length
             conv_theta = theta[:, :split]
@@ -289,4 +294,7 @@ class ParamNetwork(Network):
         for fc_l in self._fc_layers:
             x = fc_l(x)
         return x, state
+<<<<<<< HEAD
 
+=======
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c

@@ -1,5 +1,9 @@
+<<<<<<< HEAD
 import alf.algorithms.hypernetwork_layer_algorithm
 #import alf.algorithms.hypernetwork_algorithm
+=======
+import alf.algorithms.hypernetwork_algorithm
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
 
 # dataset config
 create_dataset.dataset_name='mnist'
@@ -20,6 +24,7 @@ HyperNetwork.fc_layer_params=%FC_LAYER_PARAMS
 HyperNetwork.hidden_layers=%HIDDEN_LAYERS
 HyperNetwork.particles=10
 HyperNetwork.noise_dim=256
+<<<<<<< HEAD
 HyperNetwork.kernel_sharpness=.1
 HyperNetwork.par_vi = 'gfsf'
 HyperNetwork.loss_type = 'classification'
@@ -27,10 +32,18 @@ HyperNetwork.optimizer=@hypernet/Adam()
 
 HyperNetwork.parameterization = 'layer'
 #HyperNetwork.parameterization = 'network'
+=======
+HyperNetwork.par_vi = 'svgd'
+HyperNetwork.loss_type = 'classification'
+HyperNetwork.optimizer=@hypernet/Adam()
+HyperNetwork.logging_training=True
+HyperNetwork.logging_evaluate=True
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
 
 import alf.algorithms.hypernetwork_networks
 ParamConvNet.use_bias=True
 
+<<<<<<< HEAD
 import alf.algorithms.hypernetwork_layer_generator
 ParamLayers.use_bias=True
 
@@ -39,4 +52,20 @@ Config.algorithm_ctor=@HyperNetwork
 Config.epochs=1000
 Config.summarize_grads_and_vars=True
 Config.evaluate=True
+=======
+# training config
+TrainerConfig.algorithm_ctor=@HyperNetwork
+TrainerConfig.num_epochs=1000
+TrainerConfig.num_checkpoints=2
+TrainerConfig.evaluate=True
+TrainerConfig.eval_interval=1
+TrainerConfig.summary_interval=1
+TrainerConfig.debug_summaries=True
+TrainerConfig.summarize_grads_and_vars=True
+
+
+
+
+
+>>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
 

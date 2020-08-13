@@ -109,7 +109,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         
         """
 
-        input_size = 3
+        input_size = 250
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
         batch_size = 100
@@ -122,7 +122,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         true_cov = torch.inverse(
             inputs.t() @ inputs)  # + torch.eye(input_size))
         true_mean = true_cov @ inputs.t() @ targets
-        noise_dim = 3
+        noise_dim = 250
         particles = 10
         train_batch_size = 100
         # gen_input = torch.randn(particles, noise_dim)

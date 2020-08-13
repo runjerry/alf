@@ -63,12 +63,16 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
-        dict(entropy_regularization=1.0),
+        dict(entropy_regularization=1.0, par_vi='gfsf'),
+        dict(entropy_regularization=1.0, par_vi='svgd'),
+        dict(entropy_regularization=1.0, par_vi='svgd2'),
+        dict(entropy_regularization=1.0, par_vi='svgd3'),
         dict(entropy_regularization=0.0),
         dict(entropy_regularization=0.0, mi_weight=1),
     )
     def test_generator_unconditional(self,
                                      entropy_regularization=0.0,
+                                     par_vi=None,
                                      mi_weight=None):
         """
         The generator is trained to match(STEIN)/maximize(ML) the likelihood
@@ -76,8 +80,8 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         After training, :math:`w^T w` is the variance of the distribution implied by the
         generator. So it should be :math:`diag(1,4)` for STEIN and 0 for 'ML'.
         """
-        logging.info("entropy_regularization: %s mi_weight: %s" %
-                     (entropy_regularization, mi_weight))
+        logging.info("entropy_regularization: %s par_vi: %s mi_weight: %s" %
+                     (entropy_regularization, par_vi, mi_weight))
         dim = 2
         batch_size = 512
         net = Net(dim)
@@ -87,6 +91,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             entropy_regularization=entropy_regularization,
             net=net,
             mi_weight=mi_weight,
+            par_vi=par_vi,
             optimizer=alf.optimizers.AdamTF(lr=1e-3))
 
         var = torch.tensor([1, 4], dtype=torch.float32)
@@ -124,6 +129,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
     )
     def test_generator_conditional(self,
                                    entropy_regularization=0.0,
+                                   par_vi='svgd',
                                    mi_weight=None):
         r"""
         The target conditional distribution is :math:`N(\mu; diag(1, 4))`. After training
@@ -141,6 +147,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             entropy_regularization=entropy_regularization,
             net=net,
             mi_weight=mi_weight,
+            par_vi=par_vi,
             input_tensor_spec=TensorSpec((dim, )),
             optimizer=alf.optimizers.Adam(lr=1e-3))
 
@@ -160,7 +167,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(5000):
+        for i in range(10000):
             _train()
             learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
             if i % 500 == 0:
@@ -170,11 +177,11 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         if mi_weight is not None:
             self.assertGreater(float(torch.sum(torch.abs(learned_var))), 0.5)
         elif entropy_regularization == 1.0:
-            self.assertArrayEqual(net.fc2.weight.t(), u, 0.1)
-            self.assertArrayEqual(torch.diag(var), learned_var, 0.1)
+            self.assertArrayEqual(net.fc2.weight.t(), u, 0.05)
+            self.assertArrayEqual(torch.diag(var), learned_var, 0.05)
         else:
-            self.assertArrayEqual(net.fc2.weight.t(), u, 0.1)
-            self.assertArrayEqual(torch.zeros(dim, dim), learned_var, 0.1)
+            self.assertArrayEqual(net.fc2.weight.t(), u, 0.05)
+            self.assertArrayEqual(torch.zeros(dim, dim), learned_var, 0.05)
 
 
 if __name__ == '__main__':

@@ -180,7 +180,7 @@ class HyperNetworkFisher(Generator):
                 name="Generator")
             optimizer=net.default_optimizer
 
-        disc_fc_params = (256, 256)
+        disc_fc_params = (32, 32)
         print (gen_output_dim)
         disc_net = EncodingNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
