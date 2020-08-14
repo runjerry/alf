@@ -177,12 +177,8 @@ class Generator(Algorithm):
     def noise_dim(self):
         return self._noise_dim
 
-<<<<<<< HEAD
-    def _predict(self, inputs, noise=None, batch_size=None, training=True):
-=======
     def _predict(self, inputs=None, noise=None, batch_size=None,
                  training=True):
->>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
         if inputs is None:
             assert self._input_tensor_spec is None
             if noise is None:
@@ -224,14 +220,10 @@ class Generator(Algorithm):
             AlgorithmStep: outputs with shape (batch_size, output_dim)
         """
         outputs, _ = self._predict(
-<<<<<<< HEAD
-            inputs, batch_size=batch_size, training=False)
-=======
             inputs=inputs,
             noise=noise,
             batch_size=batch_size,
             training=training)
->>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
         return AlgStep(output=outputs, state=(), info=())
 
     def train_step(self,
@@ -256,18 +248,12 @@ class Generator(Algorithm):
                 outputs: Tensor with shape (batch_size, dim)
                 info: LossInfo
         """
-<<<<<<< HEAD
-        outputs, gen_inputs = self._predict(inputs, batch_size=batch_size)
-        loss, grad = self._grad_func(inputs, outputs, loss_func)
-        loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
-=======
         if outputs is None:
             outputs, gen_inputs = self._predict(inputs, batch_size=batch_size)
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
         loss, loss_propagated = self._grad_func(inputs, outputs, loss_func,
                                                 entropy_regularization)
->>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
 
         mi_loss = ()
         if self._mi_estimator is not None:

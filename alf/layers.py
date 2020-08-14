@@ -253,11 +253,7 @@ class FC(nn.Module):
             output_size (int): output size
             activation (torch.nn.functional):
             use_bias (bool): whether use bias
-<<<<<<< HEAD
-            use_bn (bool): whether use batchnorm, not available for ParallelFC.
-=======
             use_bn (bool): whether use batch normalization.
->>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
             kernel_initializer (Callable): initializer for the FC layer kernel.
                 If none is provided a ``variance_scaling_initializer`` with gain as
                 ``kernel_init_gain`` will be used.
@@ -288,11 +284,8 @@ class FC(nn.Module):
         self._use_bn = use_bn
         if use_bn:
             self._bn = nn.BatchNorm1d(output_size)
-<<<<<<< HEAD
-=======
         else:
             self._bn = None
->>>>>>> 48fe04a0e6d09d6894d409a5668394b65ad1329c
         self.reset_parameters()
 
     def reset_parameters(self):
