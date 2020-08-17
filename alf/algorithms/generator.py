@@ -133,6 +133,8 @@ class Generator(Algorithm):
                 self._grad_func = self._svgd_grad2
             elif par_vi == 'svgd3':
                 self._grad_func = self._svgd_grad3
+            elif par_vi == 'minmax':
+                self._grad_func = self._minmax_critic_grad
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -152,6 +154,18 @@ class Generator(Algorithm):
                 last_activation=math_ops.identity,
                 name="Generator")
 
+        if par_vi == 'minmax':
+            critic = EncodingNetwork(
+                TensorSpec(shape=(output_dim, )),
+                conv_layer_params=None,
+                fc_layer_params=(256, 256),
+                activation=torch.nn.functional.relu,
+                last_layer_size=output_dim,
+                last_activation=math_ops.identity,
+                name="Critic")
+        else:
+            critic = None
+
         self._mi_estimator = None
         self._input_tensor_spec = input_tensor_spec
         if mi_weight is not None:
@@ -163,6 +177,8 @@ class Generator(Algorithm):
                 x_spec, y_spec, sampler='shift')
             self._mi_weight = mi_weight
         self._net = net
+        self._critic = critic
+
         self._predict_net = None
         self._net_moving_average_rate = net_moving_average_rate
         if net_moving_average_rate:
@@ -198,6 +214,8 @@ class Generator(Algorithm):
             outputs = self._predict_net(gen_inputs)[0]
         else:
             outputs = self._net(gen_inputs)[0]
+        if self._critic is not None:
+            outputs = (outputs, self._critic(outputs)[0])
         return outputs, gen_inputs
 
     def predict_step(self,
@@ -232,6 +250,7 @@ class Generator(Algorithm):
                    outputs=None,
                    batch_size=None,
                    entropy_regularization=None,
+                   model=None,
                    state=None):
         """
         Args:
@@ -242,19 +261,36 @@ class Generator(Algorithm):
                 shape [batch_size] as a loss for optimizing the generator
             batch_size (int): batch_size. Must be provided if inputs is None.
                 Its is ignored if inputs is not None
+            model (str): indicator of model to train for "\"minmax\" method. 
+                may be either ``critic`` or ``generator``. 
             state: not used
         Returns:
             AlgorithmStep:
                 outputs: Tensor with shape (batch_size, dim)
                 info: LossInfo
         """
+        if model is not None:
+            assert self._critic is not None, "critic network has not been "\
+                "initialized, check that par_vi is set to `minmax`"
+            assert model in ['critic', 'generator'], "model argumnet must be "\
+                "either `critic` or `generator`, got {}".format(model)
+            if model == 'critic':
+                self._grad_func = self._minmax_critic_grad
+            else:
+                self._grad_func = self._minmax_generator_grad
+                self._stored_noise = torch.randn(batch_size, self._noise_dim)
+            outputs, gen_inputs = self._predict(
+                inputs,
+                noise=self._stored_noise,
+                batch_size=batch_size)
+
         if outputs is None:
             outputs, gen_inputs = self._predict(inputs, batch_size=batch_size)
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
+
         loss, loss_propagated = self._grad_func(inputs, outputs, loss_func,
                                                 entropy_regularization)
-
         mi_loss = ()
         if self._mi_estimator is not None:
             mi_step = self._mi_estimator.train_step([gen_inputs, outputs])
@@ -444,6 +480,58 @@ class Generator(Algorithm):
         grad = loss_grad - entropy_regularization * logq_grad
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
+        return loss, loss_propagated
+    
+    def _approx_jacobian_trace(self, critic_out, params):
+        """Hutchinson's trace Jacobian estimator O(1) call to autograd,
+            used by minmax grad"""
+        eps = torch.randn_like(critic_out)
+        jvp = torch.autograd.grad(
+                critic_out,
+                params,
+                grad_outputs=eps,
+                retain_graph=True,
+                create_graph=True)[0]
+        tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
+        return tr_jvp
+
+    def _minmax_critic_grad(self, inputs, outputs, loss_func, entropy_regularization):
+        """update direction \phi^*(x) for minmax amortized svgd"""
+        assert inputs is None, "\"minmax\" does not support conditional generator"
+        net_outputs, critic_outputs = outputs  # x, f(x)
+        loss_inputs = net_outputs
+        loss = loss_func(loss_inputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        
+        loss_grad = torch.autograd.grad(
+                neglogp.sum(),
+                net_outputs)[0]  # [N, D]
+        log_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
+        tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
+        
+        for p in self._net.parameters():
+            p.requires_grad = False
+        
+        lamb = 10.
+        stein_pq = (log_p_f + tr_critic.unsqueeze(1)).mean() # [n x 1]
+        l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
+        adv_grad = -1 * stein_pq + l2_penalty
+        loss_propagated = adv_grad
+        return loss, loss_propagated
+    
+    def _minmax_generator_grad(self, inputs, outputs, loss_func, entropy_regularization):
+        """for "\"minmax\", compute particle updates w.r.t generator"""    
+        net_outputs, critic_outputs = outputs  # x, f(x) 
+        loss_inputs = net_outputs
+        loss = loss_func(loss_inputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        loss_propagated = torch.sum(critic_outputs.detach() * net_outputs, dim=1)
         return loss, loss_propagated
 
     def after_update(self, training_info):

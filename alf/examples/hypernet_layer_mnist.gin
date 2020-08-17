@@ -21,7 +21,7 @@ HyperNetwork.particles=10
 HyperNetwork.noise_dim=256
 
 HyperNetwork.parameterization = 'layer'
-HyperNetwork.par_vi = 'svgd'
+HyperNetwork.par_vi = 'gfsf'
 HyperNetwork.loss_type = 'classification'
 HyperNetwork.optimizer=@hypernet/Adam()
 HyperNetwork.logging_training=True

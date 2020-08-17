@@ -63,6 +63,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
+        dict(entropy_regularization=1.0, par_vi='minmax'),
         dict(entropy_regularization=1.0, par_vi='gfsf'),
         dict(entropy_regularization=1.0, par_vi='svgd'),
         dict(entropy_regularization=1.0, par_vi='svgd2'),
@@ -102,13 +103,23 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
                 0.5 * torch.matmul(x * x, torch.reshape(precision, (dim, 1))),
                 axis=-1)
 
-        def _train():
+        def _train(i):
+            if par_vi == 'minmax':
+                for p in generator._net.parameters():
+                    p.requires_grad = True
+                if i % (5+1):
+                    model = 'critic'
+                else:
+                    model = 'generator'
+                #print (model)
+            else:
+                model = None
             alg_step = generator.train_step(
-                inputs=None, loss_func=_neglogprob, batch_size=batch_size)
+                inputs=None, loss_func=_neglogprob, batch_size=batch_size, model=model)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(5000):
-            _train()
+        for i in range(20000):
+            _train(i)
             learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
             if i % 500 == 0:
                 print(i, "learned var=", learned_var)
@@ -167,7 +178,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(10000):
+        for i in range(1000):
             _train()
             learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
             if i % 500 == 0:
@@ -182,7 +193,6 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         else:
             self.assertArrayEqual(net.fc2.weight.t(), u, 0.05)
             self.assertArrayEqual(torch.zeros(dim, dim), learned_var, 0.05)
-
 
 if __name__ == '__main__':
     alf.test.main()
