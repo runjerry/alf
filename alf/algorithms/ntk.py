@@ -68,6 +68,7 @@ class SimpleMLP(Network):
         Args:
             inputs (Tensor):
             state: not used, just keeps the interface same with other networks.
+            requires_ntk (bool): whether compute ntk
         """
         self._encodes = self._encoder(inputs)
         self._hidden_neurons = self._hidden_activation(self._encodes)
@@ -85,6 +86,8 @@ class SimpleMLP(Network):
         return self._hidden_neurons
 
     def _compute_ntk(self, inputs):
+        """Compute ntk in closed-form. """
+
         ntk = torch.pow(self._hidden_neurons.norm(), 2) * torch.eye(
             self._output_size)
         mask = self.encodes > 0

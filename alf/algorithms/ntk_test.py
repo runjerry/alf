@@ -12,20 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from absl.testing import parameterized
-import numpy as np
 import torch
-import torch.nn.functional as F
 
 import alf
-from alf.algorithms.hypernetwork_algorithm import HyperNetwork
-from alf.algorithms.hypernetwork_networks import ParamConvNet, ParamNetwork
 from alf.algorithms.ntk import SimpleMLP
 from alf.tensor_specs import TensorSpec
-from alf.utils import math_ops
 
 
 def jacobian(y, x, create_graph=False):
+    """It is from Adam Paszke's implementation:
+    https://gist.github.com/apaszke/226abdf867c4e9d6698bd198f3b45fb7
+    """
     jac = []
     flat_y = y.reshape(-1)
     grad_y = torch.zeros_like(flat_y)
@@ -35,6 +32,7 @@ def jacobian(y, x, create_graph=False):
             flat_y, x, grad_y, retain_graph=True, create_graph=create_graph)
         jac.append(grad_x.reshape(x.shape))
         grad_y[i] = 0.
+
     return torch.stack(jac).reshape(y.shape + x.shape)
 
 
@@ -46,13 +44,13 @@ class NtkTest(alf.test.TestCase):
     def test_ntk(self, input_size=5, hidden_layer_size=2):
         spec = TensorSpec((input_size, ))
         mlp = SimpleMLP(spec, hidden_layer_size=hidden_layer_size)
-        x = torch.randn(5)
+        x = torch.randn(input_size)
         outputs, _ = mlp(x, requires_ntk=True)
         y, ntk = outputs
 
+        # compute ntk using autograd
         Jd = jacobian(y, mlp._decoder.weight)
         Je = jacobian(y, mlp._encoder.weight)
-
         Jd = Jd.reshape(input_size, mlp._decoder.weight.data.nelement())
         Je = Je.reshape(input_size, mlp._encoder.weight.data.nelement())
 
