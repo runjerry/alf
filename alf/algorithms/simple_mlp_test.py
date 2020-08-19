@@ -15,7 +15,7 @@
 import torch
 
 import alf
-from alf.algorithms.ntk import SimpleMLP
+from alf.algorithms.simple_mlp import SimpleMLP
 from alf.tensor_specs import TensorSpec
 
 
@@ -36,12 +36,12 @@ def jacobian(y, x, create_graph=False):
     return torch.stack(jac).reshape(y.shape + x.shape)
 
 
-class NtkTest(alf.test.TestCase):
+class SimpleMLPTest(alf.test.TestCase):
     def assertArrayEqual(self, x, y, eps):
         self.assertEqual(x.shape, y.shape)
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
-    def test_ntk(self, input_size=5, hidden_layer_size=2):
+    def test_simple_mlp(self, input_size=5, hidden_layer_size=2):
         spec = TensorSpec((input_size, ))
         mlp = SimpleMLP(spec, hidden_layer_size=hidden_layer_size)
         x = torch.randn(input_size)

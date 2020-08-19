@@ -88,7 +88,7 @@ class SimpleMLP(Network):
     def _compute_ntk(self, inputs):
         """Compute ntk in closed-form. """
 
-        ntk = torch.pow(self._hidden_neurons.norm(), 2) * torch.eye(
+        ntk = torch.pow(self.hidden_neurons.norm(), 2) * torch.eye(
             self._output_size)
         pos_idx = (self.encodes > 0).nonzero().squeeze()
         Dweight = self._decoder.weight.data[:, pos_idx]
@@ -108,7 +108,7 @@ class SimpleMLP(Network):
         assert vec.ndim == 1 and len(vec) == self._input_size, \
             ("vec should has shape {}!".format(self._input_size))
 
-        bottleneck_norm2 = torch.pow(self._hidden_neurons.norm(), 2)
+        bottleneck_norm2 = torch.pow(self.hidden_neurons.norm(), 2)
         pos_idx = (self.encodes > 0).nonzero().squeeze()
         Dweight = self._decoder.weight.data[:, pos_idx]
         if Dweight.ndim == 1:
