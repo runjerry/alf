@@ -90,8 +90,10 @@ class SimpleMLP(Network):
 
         ntk = torch.pow(self._hidden_neurons.norm(), 2) * torch.eye(
             self._output_size)
-        mask = self.encodes > 0
-        Dweight = self._decoder.weight.data * mask
+        pos_idx = (self.encodes > 0).nonzero().squeeze()
+        Dweight = self._decoder.weight.data[:, pos_idx]
+        if Dweight.ndim == 1:
+            Dweight = Dweight.unsqueeze(-1)
         inputs_norm2 = torch.pow(inputs.norm(), 2)
         ntk = ntk + inputs_norm2 * Dweight @ Dweight.t()
 
@@ -107,8 +109,10 @@ class SimpleMLP(Network):
             ("vec should has shape {}!".format(self._input_size))
 
         bottleneck_norm2 = torch.pow(self._hidden_neurons.norm(), 2)
-        mask = self.encodes > 0
-        Dweight = self._decoder.weight.data * mask
+        pos_idx = (self.encodes > 0).nonzero().squeeze()
+        Dweight = self._decoder.weight.data[:, pos_idx]
+        if Dweight.ndim == 1:
+            Dweight = Dweight.unsqueeze(-1)
         inputs_norm2 = torch.pow(inputs.norm(), 2)
 
         ntk_vec = inputs_norm2 * Dweight @ (Dweight.t() @ vec)
