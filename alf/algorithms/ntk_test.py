@@ -47,6 +47,8 @@ class NtkTest(alf.test.TestCase):
         x = torch.randn(input_size)
         outputs, _ = mlp(x, requires_ntk=True)
         y, ntk = outputs
+        vec = torch.randn(input_size)
+        ntk_vec_prod = mlp.ntk_vec_prod(x, vec)
 
         # compute ntk using autograd
         Jd = jacobian(y, mlp._decoder.weight)
@@ -56,8 +58,10 @@ class NtkTest(alf.test.TestCase):
 
         jac = torch.cat((Jd, Je), dim=-1)
         ntk2 = jac @ jac.t()
+        ntk_vec_prod2 = ntk2 @ vec
 
         self.assertArrayEqual(ntk, ntk2, 1e-6)
+        self.assertArrayEqual(ntk_vec_prod, ntk_vec_prod2, 1e-6)
 
 
 if __name__ == "__main__":
