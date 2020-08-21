@@ -121,7 +121,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             generator.update_with_gradient(alg_step.info)
             generator.after_update(alg_step.info)
 
-        for i in range(500000):
+        for i in range(6000):
             _train(i)
             learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
             if i % 500 == 0:
@@ -181,7 +181,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(500):
+        for i in range(5000):
             _train()
             learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
             if i % 500 == 0:

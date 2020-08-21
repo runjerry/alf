@@ -525,26 +525,36 @@ class Generator(Algorithm):
         assert inputs is None, "\"KSD\" does not support conditional generator"
         particles = outputs.shape[0] // 2
         outputs_i, outputs_j = torch.split(outputs, particles, dim=0)
-        loss_inputs = outputs_j
-        loss = loss_func(loss_inputs)
-        if isinstance(loss, tuple):
-            neglogp = loss.loss
+        loss_j = loss_func(outputs_j)
+        loss_i = loss_func(outputs_i)
+        if isinstance(loss_j, tuple):
+            neglogp_j = loss_j.loss
+            neglogp_i = loss_i.loss
         else:
-            neglogp = loss
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs_j)[0]  # [N2, D]
-        # kappa: [B, B], kappa_grad: [B, D], trace_grad: [B, B] 
-        kappa, _, _ = self._imq_func(outputs_j, outputs_i)
-        kappa_grad = torch.autograd.grad(kappa.sum(), outputs_j, retain_graph=True)[0]
-        trace_grad = self._approx_jacobian_trace(kappa, outputs_j)
+            neglogp_j = loss_j
+            neglogp_i = loss_i
+        loss_grad_j = torch.autograd.grad(neglogp_j.sum(), outputs_j)[0]  # [N2, D]
+        loss_grad_i = torch.autograd.grad(neglogp_i.sum(), outputs_i)[0]  # [N2, D]
+        kappa = self._rbf_func(outputs_j, outputs_i)
+        grad_a = loss_grad_j * kappa[:, None] * loss_grad_i 
+        kappa_grad_j = torch.autograd.grad(
+                kappa.sum(),
+                outputs_j,
+                create_graph=True,
+                retain_graph=True)[0]
+        kappa_grad_i = torch.autograd.grad(
+                kappa.sum(),
+                outputs_i,
+                create_graph=True,
+                retain_graph=True)[0]
+        grad_b = loss_grad_j * kappa_grad_i + loss_grad_i * kappa_grad_j
+        trace_grad = self._approx_jacobian_trace(kappa_grad_j, outputs_i)
 
-        grad_a = torch.mm(loss_grad, loss_grad.T) * kappa
-        grad_b = 2 * (loss_grad * kappa_grad)        
-        grad_diff = grad_a.sum(1) + trace_grad
-        grad = entropy_regularization * grad_b + grad_diff.unsqueeze(1)
+        grad = entropy_regularization * grad_b + (grad_a.sum(1) - trace_grad).unsqueeze(1)
 
-        ksd_grad = grad / (particles)#*particles - 1)
+        ksd_grad = grad / (particles*particles - 1)
         loss_propagated = torch.sum(ksd_grad.detach() * outputs_i, dim=-1)
-        return loss, loss_propagated
+        return loss_j, loss_propagated
 
     def _approx_jacobian_trace(self, fx, x):
         """Hutchinson's trace Jacobian estimator O(1) call to autograd,
