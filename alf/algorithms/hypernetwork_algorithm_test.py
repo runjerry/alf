@@ -23,6 +23,10 @@ from alf.algorithms.hypernetwork_networks import ParamConvNet, ParamNetwork
 from alf.tensor_specs import TensorSpec
 from alf.utils import math_ops
 
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt 
+import seaborn as sns
 
 class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
     def cov(self, data, rowvar=False):
@@ -51,13 +55,47 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         x -= torch.mean(x, dim=1, keepdim=True)
         return fact * x.matmul(x.t()).squeeze()
 
+    def plot_predictions(self, inputs, targets, analytic_preds, step):
+        fig, ax = plt.subplots(1)
+        fig.suptitle("Bayes Linear Regression Predictions")
+        inputs = inputs.cpu().numpy()
+        targets = targets.cpu().numpy()
+        analytic_preds = analytic_preds.cpu().detach().numpy()
+        ax.scatter(targets, np.zeros_like(targets), color='r', label='targets')
+        ax.scatter(analytic_preds, np.zeros_like(targets), color='g', label='analytic')
+        plt.legend(loc='best')
+        plt.grid(True)
+        plt.savefig('pred_err_{}.png'.format(step))
+        plt.close('all')
+        #plt.show()
+
+    def plot_cov_heatmap(self, true_cov, analytic_cov, learned_cov, step):
+        fig, ax = plt.subplots(3)
+        fig.suptitle("Bayes Linear Regression Covariance Heatmap")
+        true_cov = true_cov.cpu().numpy()
+        analytic_cov = analytic_cov.cpu().numpy()
+        learned_cov = learned_cov.cpu().detach().numpy()
+        ax[0].set_title('True Covariance')
+        sns.heatmap(true_cov, ax=ax[0])
+        ax[1].set_title('Hypernet Analytic Covariance')
+        sns.heatmap(analytic_cov, ax=ax[1])
+        ax[2].set_title('Hypernet Learned Covariance')
+        sns.heatmap(learned_cov, ax=ax[2])
+        plt.tight_layout()
+        plt.savefig('cov_map_{}.png'.format(step))
+        plt.close('all')
+        #plt.show()
+
+
     def assertArrayGreater(self, x, y, eps):
         self.assertEqual(x.shape, y.shape)
         self.assertGreater(float(torch.min(x - y)), eps)
 
-    @parameterized.parameters(('gfsf', 512), ('gfsf', 512, 100), ('svgd2'),
-                              ('svgd2', 32, 100), ('svgd3'),
-                              ('svgd3', 32, 100))
+    @parameterized.parameters(('minmax', 512, 100), ('minmax', 512),
+                              #('gfsf', 512), ('gfsf', 512, 100),
+                              #('svgd2'), ('svgd2', 32, 100),
+                              #('svgd3'), ('svgd3', 32, 100)
+                              )
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
                                         particles=32,
@@ -73,6 +111,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         match the posterior :math:`p(\beta|X,y)` for both svgd and gfsf.
         
         """
+        print ('Testing {} method with {} particles'.format(par_vi, particles))
         input_size = 3
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
@@ -119,6 +158,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
 
         def _test(i):
             params = algorithm.sample_parameters(particles=200)
+            if isinstance(params, tuple):
+                params = params[0]
             computed_mean = params.mean(0)
             computed_cov = self.cov(params)
 
@@ -155,6 +196,9 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             print("train_iter {}: sampled cov err {}".format(i, scov_err))
             print("train_iter {}: cov err {}".format(i, cov_err))
             print("learned_cov norm: {}".format(learned_cov.norm()))
+            
+            self.plot_predictions(inputs, targets, computed_preds, i)
+            self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
 
         # train_iter = 90000
         # true_mean = beta
@@ -174,7 +218,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         #         print("train_iter {}: mean err {}".format(t, mean_err))
         #         print("train_iter {}: learned_cov norm {}".format(t, torch.norm(learned_cov)))
 
-        train_iter = 40000
+        train_iter = 1000 #40000
         for i in range(train_iter):
             _train()
             if i % 1000 == 0:

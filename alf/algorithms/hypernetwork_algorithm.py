@@ -202,7 +202,6 @@ class HyperNetwork(Algorithm):
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
-            optimizer=optimizer,
             name=name)
 
         self._param_net = param_net

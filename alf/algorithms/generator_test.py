@@ -86,6 +86,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         dim = 2
         batch_size = 512
         net = Net(dim)
+        d_iters = 5
         generator = Generator(
             dim,
             noise_dim=3,
@@ -105,20 +106,21 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
 
         def _train(i):
             if par_vi == 'minmax':
-                for p in generator._net.parameters():
-                    p.requires_grad = True
-                if i % (5+1):
+                if i % (d_iters+1):
                     model = 'critic'
                 else:
                     model = 'generator'
-                #print (model)
             else:
                 model = None
             alg_step = generator.train_step(
-                inputs=None, loss_func=_neglogprob, batch_size=batch_size, model=model)
+                inputs=None,
+                loss_func=_neglogprob,
+                batch_size=batch_size,
+                model=model)
             generator.update_with_gradient(alg_step.info)
+            generator.after_update(alg_step.info)
 
-        for i in range(20000):
+        for i in range(6000):
             _train(i)
             learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
             if i % 500 == 0:
@@ -178,7 +180,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(1000):
+        for i in range(5000):
             _train()
             learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
             if i % 500 == 0:
@@ -188,11 +190,11 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         if mi_weight is not None:
             self.assertGreater(float(torch.sum(torch.abs(learned_var))), 0.5)
         elif entropy_regularization == 1.0:
-            self.assertArrayEqual(net.fc2.weight.t(), u, 0.05)
-            self.assertArrayEqual(torch.diag(var), learned_var, 0.05)
+            self.assertArrayEqual(net.fc2.weight.t(), u, 0.1)
+            self.assertArrayEqual(torch.diag(var), learned_var, 0.1)
         else:
-            self.assertArrayEqual(net.fc2.weight.t(), u, 0.05)
-            self.assertArrayEqual(torch.zeros(dim, dim), learned_var, 0.05)
+            self.assertArrayEqual(net.fc2.weight.t(), u, 0.1)
+            self.assertArrayEqual(torch.zeros(dim, dim), learned_var, 0.1)
 
 if __name__ == '__main__':
     alf.test.main()

@@ -209,7 +209,20 @@ class HyperNetwork(Algorithm):
                 use_fc_bn=use_fc_bn,
                 optimizer=optimizer,
                 name="Generator")
-            optimizer = net.default_optimizer
+            #optimizer = net.default_optimizer
+        
+        if par_vi == 'minmax':
+            critic = EncodingNetwork(
+                TensorSpec(shape=(gen_output_dim, )),
+                conv_layer_params=None,
+                fc_layer_params=(512, 512, ),
+                activation=torch.nn.functional.relu,
+                last_layer_size=gen_output_dim,
+                last_activation=math_ops.identity,
+                name="Critic")
+            self._d_iters = 5
+        else:
+            critic = None
 
         if logging_network:
             logging.info("Generated network")
@@ -229,9 +242,10 @@ class HyperNetwork(Algorithm):
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
-            optimizer=optimizer,
+            critic=critic,
+            optimizer=None,
             name=name)
-
+        
         self._param_net = param_net
         self._particles = particles
         self._entropy_regularization = entropy_regularization
@@ -306,11 +320,17 @@ class HyperNetwork(Algorithm):
             for batch_idx, (data, target) in enumerate(self._train_loader):
                 data = data.to(alf.get_default_device())
                 target = target.to(alf.get_default_device())
+                if self._generator._par_vi == 'minmax':
+                    if batch_idx % (self._d_iters + 1):
+                        minmax_model = 'critic'
+                    else:
+                        minmax_model = 'generator'
                 alg_step = self.train_step((data, target),
                                            particles=particles,
+                                           model=model,
                                            state=state)
                 loss_info, params = self.update_with_gradient(alg_step.info)
-                # loss += alg_step.info.extra.generator.loss
+                self._generator.after_update(alg_step.info)
                 loss += loss_info.extra.generator.loss
                 if self._loss_type == 'classification':
                     avg_acc.append(alg_step.info.extra.generator.extra)
@@ -328,12 +348,14 @@ class HyperNetwork(Algorithm):
                    inputs,
                    particles=None,
                    entropy_regularization=None,
+                   model=None,
                    state=None):
         """Perform one batch of training computation.
 
         Args:
             inputs (nested Tensor): input training data. 
             particles (int): number of sampled particles. 
+            model (str): 
             state: not used
 
         Returns:
@@ -351,6 +373,7 @@ class HyperNetwork(Algorithm):
                                         self._loss_type),
             outputs=params,
             entropy_regularization=entropy_regularization,
+            model=model,
             state=())
 
     def evaluate(self, particles=None):
@@ -361,6 +384,8 @@ class HyperNetwork(Algorithm):
         if self._use_fc_bn:
             self._generator.eval()
         params = self.sample_parameters(particles=particles)
+        if self._generator._critic is not None:
+            params = params[0]
         self._param_net.set_parameters(params)
         if self._use_fc_bn:
             self._generator.train()
@@ -411,6 +436,10 @@ class HyperNetwork(Algorithm):
                                             *target.shape[1:])
         total_loss = regression_loss(output, target)
         return loss, total_loss
+
+    def _spectral_norm(self, module):
+        if 'weight' in module._parameters:
+            torch.nn.utils.spectral_norm(module)
 
     def summarize_train(self, loss_info, params, cum_loss=None, avg_acc=None):
         """Generate summaries for training & loss info after each gradient update.
