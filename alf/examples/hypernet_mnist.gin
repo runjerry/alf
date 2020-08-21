@@ -1,4 +1,4 @@
-import alf.algorithms.hypernetwork_minmax_algorithm
+import alf.algorithms.hypernetwork_algorithm
 
 # dataset config
 create_dataset.dataset_name='mnist'

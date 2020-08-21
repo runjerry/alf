@@ -523,27 +523,27 @@ class Generator(Algorithm):
             convienience
         """
         assert inputs is None, "\"KSD\" does not support conditional generator"
-        particles = outputs.shape[0]
-        outputs2, _ = self._predict(inputs, batch_size=particles)
-        loss_inputs = outputs2
+        particles = outputs.shape[0] // 2
+        outputs_i, outputs_j = torch.split(outputs, particles, dim=0)
+        loss_inputs = outputs_j
         loss = loss_func(loss_inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss
         else:
             neglogp = loss
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs2)[0]  # [N2, D]
+        loss_grad = torch.autograd.grad(neglogp.sum(), outputs_j)[0]  # [N2, D]
         # kappa: [B, B], kappa_grad: [B, D], trace_grad: [B, B] 
-        kappa, kappa_grad, trace_grad = self._imq_func(outputs2, outputs)
+        kappa, _, _ = self._imq_func(outputs_j, outputs_i)
+        kappa_grad = torch.autograd.grad(kappa.sum(), outputs_j, retain_graph=True)[0]
+        trace_grad = self._approx_jacobian_trace(kappa, outputs_j)
+
         grad_a = torch.mm(loss_grad, loss_grad.T) * kappa
-        grad_b = 2 * (loss_grad * kappa_grad)
-        
-        grad = entropy_regularization * grad_b + (grad_a + trace_grad).sum(1, keepdim=True)
-        
-        ksd_grad = grad / (particles*particles - 1)
-        # print (ksd_grad, ksd_grad.shape)
-        # print (ksd_grad)
-        loss_propagated = torch.sum(ksd_grad.detach() * outputs, dim=-1)
-        #loss_propagated = ksd_grad
+        grad_b = 2 * (loss_grad * kappa_grad)        
+        grad_diff = grad_a.sum(1) + trace_grad
+        grad = entropy_regularization * grad_b + grad_diff.unsqueeze(1)
+
+        ksd_grad = grad / (particles)#*particles - 1)
+        loss_propagated = torch.sum(ksd_grad.detach() * outputs_i, dim=-1)
         return loss, loss_propagated
 
     def _approx_jacobian_trace(self, fx, x):
@@ -556,7 +556,11 @@ class Generator(Algorithm):
                 grad_outputs=eps,
                 retain_graph=True,
                 create_graph=True)[0]
-        tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
+        if eps.shape[-1] == jvp.shape[-1]:
+            tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
+        else:
+            tr_jvp = torch.einsum('bi,bj->b', jvp, eps)
+
         return tr_jvp
     
     def _minmax_critic_grad(self, inputs, outputs, loss_func, entropy_regularization):

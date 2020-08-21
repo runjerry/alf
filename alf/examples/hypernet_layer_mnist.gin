@@ -20,8 +20,8 @@ HyperNetwork.hidden_layers=%HIDDEN_LAYERS
 HyperNetwork.particles=10
 HyperNetwork.noise_dim=256
 
-HyperNetwork.parameterization = 'layer'
-HyperNetwork.par_vi = 'gfsf'
+HyperNetwork.parameterization = 'network'
+HyperNetwork.par_vi = 'minmax'
 HyperNetwork.loss_type = 'classification'
 HyperNetwork.optimizer=@hypernet/Adam()
 HyperNetwork.logging_training=True
@@ -29,10 +29,6 @@ HyperNetwork.logging_evaluate=True
 
 import alf.algorithms.hypernetwork_networks
 ParamConvNet.use_bias=True
-
-import alf.algorithms.hypernetwork_layer_generator
-ParamLayers.use_bias=True
-
 # training config
 TrainerConfig.algorithm_ctor=@HyperNetwork
 TrainerConfig.num_epochs=1000

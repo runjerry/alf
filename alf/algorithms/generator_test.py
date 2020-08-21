@@ -63,11 +63,12 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
+        dict(entropy_regularization=1.0, par_vi='ksd'),
         dict(entropy_regularization=1.0, par_vi='minmax'),
-        dict(entropy_regularization=1.0, par_vi='gfsf'),
-        dict(entropy_regularization=1.0, par_vi='svgd'),
-        dict(entropy_regularization=1.0, par_vi='svgd2'),
-        dict(entropy_regularization=1.0, par_vi='svgd3'),
+        #dict(entropy_regularization=1.0, par_vi='gfsf'),
+        #dict(entropy_regularization=1.0, par_vi='svgd'),
+        #dict(entropy_regularization=1.0, par_vi='svgd2'),
+        #dict(entropy_regularization=1.0, par_vi='svgd3'),
         dict(entropy_regularization=0.0),
         dict(entropy_regularization=0.0, mi_weight=1),
     )
@@ -120,7 +121,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             generator.update_with_gradient(alg_step.info)
             generator.after_update(alg_step.info)
 
-        for i in range(6000):
+        for i in range(500000):
             _train(i)
             learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
             if i % 500 == 0:
@@ -180,7 +181,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(5000):
+        for i in range(500):
             _train()
             learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
             if i % 500 == 0:

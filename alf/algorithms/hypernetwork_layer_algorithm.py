@@ -215,7 +215,7 @@ class HyperNetwork(Algorithm):
             critic = EncodingNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
-                fc_layer_params=(512, 512, ),
+                fc_layer_params=(512, 512, 512, 512),
                 activation=torch.nn.functional.relu,
                 last_layer_size=gen_output_dim,
                 last_activation=math_ops.identity,
@@ -322,9 +322,9 @@ class HyperNetwork(Algorithm):
                 target = target.to(alf.get_default_device())
                 if self._generator._par_vi == 'minmax':
                     if batch_idx % (self._d_iters + 1):
-                        minmax_model = 'critic'
+                        model = 'critic'
                     else:
-                        minmax_model = 'generator'
+                        model = 'generator'
                 alg_step = self.train_step((data, target),
                                            particles=particles,
                                            model=model,
