@@ -75,10 +75,6 @@ class SimpleMLP(Network):
         outputs = self._decoder(self._hidden_neurons)
         return outputs, state
 
-    # @property
-    # def encodes(self):
-    #     return self._encodes
-
     @property
     def hidden_neurons(self):
         return self._hidden_neurons
@@ -115,28 +111,6 @@ class SimpleMLP(Network):
         ntk = ntk + inputs_norm2 * torch.matmul(D1, D2.t())
 
         return ntk
-
-    def ntk_vec_prod(self, inputs, vec):
-        """ 
-        Compute ntk vector product in closed-form. 
-        No need to explicitly compute the large ntk matrix first. 
-        """
-        vec = vec.squeeze()
-        assert vec.ndim == 1 and len(vec) == self._input_size, \
-            ("vec should has shape {}!".format(self._input_size))
-
-        bottleneck_norm2 = torch.pow(self.hidden_neurons.norm(), 2)
-        # pos_idx = (self.encodes > 0).nonzero().squeeze()
-        # Dweight = self._decoder.weight.data[:, pos_idx]
-        # if Dweight.ndim == 1:
-        #     Dweight = Dweight.unsqueeze(-1)
-        mask = self.encodes > 0
-        Dweight = self._decoder.weight.data * mask
-        inputs_norm2 = torch.pow(inputs.norm(), 2)
-
-        ntk_vec = inputs_norm2 * Dweight @ (Dweight.t() @ vec)
-
-        return ntk_vec + bottleneck_norm2 * vec
 
     def ntk_svgd(self, inputs, hidden_neurons, loss_func):
         """Compute the ntk svgd in closed-form. 

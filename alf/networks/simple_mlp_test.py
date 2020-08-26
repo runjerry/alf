@@ -15,7 +15,7 @@
 import torch
 
 import alf
-from alf.algorithms.simple_mlp import SimpleMLP
+from alf.networks.simple_mlp import SimpleMLP
 from alf.tensor_specs import TensorSpec
 
 
