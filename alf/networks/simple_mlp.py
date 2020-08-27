@@ -116,14 +116,14 @@ class SimpleMLP(Network):
         """Compute the ntk svgd in closed-form. 
 
         """
-        assert inputs.ndim == 2 and len(inputs.shape[-1]) == self._input_size, \
+        assert inputs.ndim == 2 and inputs.shape[-1] == self._input_size, \
             ("inputs should has shape (batch, {})!".format(self._input_size))
 
         num_particles = inputs.shape[0] // 2
         inputs_i, inputs_j = torch.split(inputs, num_particles, dim=0)
         hidden_i, hidden_j = torch.split(hidden_neurons, num_particles, dim=0)
-        mask_i = hidden_i > 0  # [bi, d]
-        mask_j = hidden_j > 0  # [bj, d]
+        mask_i = (hidden_i > 0).float()  # [bi, d]
+        mask_j = (hidden_j > 0).float()  # [bj, d]
         D = self._decoder.weight.data
         E = self._encoder.weight.data
 
@@ -134,7 +134,7 @@ class SimpleMLP(Network):
             neglogp = loss.loss
         else:
             neglogp = loss
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs_j)[0]  # [bj, n]
+        loss_grad = torch.autograd.grad(neglogp.sum(), inputs_j)[0]  # [bj, n]
         ntk_logp_1 = torch.matmul(hidden_j.t(), loss_grad)  # [d, n]
         ntk_logp_1 = torch.matmul(hidden_i, ntk_logp_1)  # [bi, n]
 
@@ -156,10 +156,8 @@ class SimpleMLP(Network):
         # compute the second term of ntk_grad
         M2 = mask_j.unsqueeze(0).expand_as(D)  # [n, d]
         DM = D * M2  # [n, d]
-        Dx = torch.matmul(inputs_i, D)  # [bi, d]
+        DX = torch.matmul(inputs_i, D)  # [bi, d]
         DXM = DX * mask_i  # [bi, d]
         ntk_grad_2 = torch.matmul(DXM, DM.t())  # [bi, n]
 
-        grad = ntk_logp + ntk_grad_1 + ntk_grad_2  # [bi, n]
-
-        return grad
+        return ntk_logp, ntk_grad_1 + ntk_grad_2, loss

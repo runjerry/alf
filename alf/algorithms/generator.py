@@ -22,6 +22,7 @@ from alf.algorithms.mi_estimator import MIEstimator
 from alf.data_structures import AlgStep, LossInfo, namedtuple
 import alf.nest as nest
 from alf.networks import Network, EncodingNetwork
+from alf.networks.simple_mlp import SimpleMLP
 from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops
 from alf.utils.averager import AdaptiveAverager
@@ -131,6 +132,7 @@ class Generator(Algorithm):
             name (str): name of this generator
         """
         super().__init__(train_state_spec=(), optimizer=optimizer, name=name)
+        self._output_dim = output_dim
         self._noise_dim = noise_dim
         self._entropy_regularization = entropy_regularization
         self._par_vi = par_vi
@@ -145,6 +147,9 @@ class Generator(Algorithm):
                 self._grad_func = self._svgd_grad2
             elif par_vi == 'svgd3':
                 self._grad_func = self._svgd_grad3
+            elif par_vi == 'ntk':
+                self._grad_func = self._svgd_grad_ntk
+                self._mlp_hidden_size = max(2, min(512, output_dim))
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -441,6 +446,26 @@ class Generator(Algorithm):
                                    loss_grad) / num_particles  # [N, D]
         grad = kernel_logp - entropy_regularization * kernel_grad.mean(0)
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
+
+        return loss, loss_propagated
+
+    def _svgd_grad_ntk(self, inputs, outputs, loss_func,
+                       entropy_regularization):
+        """
+        Compute particle gradients via SVGD, using closed-form ntk of SimpleMLP
+        as kernel, and empirical expectation evaluated by splitting half of the
+        sampled batch.
+        """
+        assert inputs is None, '"svgd2" does not support conditional generator'
+        num_particles = outputs.shape[0] // 2
+        outputs_i, outputs_j = torch.split(outputs, num_particles, dim=0)
+        spec = TensorSpec((self._output_dim, ))
+        mlp = SimpleMLP(spec, hidden_layer_size=self._mlp_hidden_size)
+        mlp(outputs)
+        ntk_logp, ntk_grad, loss = mlp.ntk_svgd(outputs, mlp.hidden_neurons,
+                                                loss_func)
+        grad = ntk_logp - entropy_regularization * ntk_grad
+        loss_propagated = torch.sum(grad.detach() * outputs_i, dim=-1)
 
         return loss, loss_propagated
 

@@ -41,7 +41,7 @@ class SimpleMLPTest(alf.test.TestCase):
         self.assertEqual(x.shape, y.shape)
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
-    def test_simple_mlp(self, input_size=5, hidden_layer_size=2):
+    def test_compute_ntk(self, input_size=5, hidden_layer_size=2):
         batch_size = 2
         spec = TensorSpec((input_size, ))
         mlp = SimpleMLP(spec, hidden_layer_size=hidden_layer_size)
@@ -62,6 +62,72 @@ class SimpleMLPTest(alf.test.TestCase):
         ntk2 = jac[0] @ jac[1].t()
 
         self.assertArrayEqual(ntk, ntk2, 1e-6)
+
+    def test_ntk_svgd(self, input_size=5, hidden_layer_size=2):
+        batch_size = 2
+        spec = TensorSpec((input_size, ))
+        mlp = SimpleMLP(spec, hidden_layer_size=hidden_layer_size)
+        x1 = torch.randn(batch_size, input_size, requires_grad=True)
+        x2 = torch.randn(batch_size, input_size, requires_grad=True)
+        y1, _ = mlp(x1)
+        y2, _ = mlp(x2)
+
+        ## compute ntk svgd by autograd
+        # compute the 1st term of the ntk svgd
+        precision = torch.rand(input_size)
+
+        def _neglogprob(x):
+            return torch.squeeze(
+                0.5 * torch.matmul(x * x,
+                                   torch.reshape(precision, (input_size, 1))),
+                axis=-1)
+
+        Jd = jacobian(y1, mlp._decoder.weight)
+        Je = jacobian(y1, mlp._encoder.weight)
+        Jd = Jd.reshape(batch_size, input_size,
+                        mlp._decoder.weight.data.nelement())
+        Je = Je.reshape(batch_size, input_size,
+                        mlp._encoder.weight.data.nelement())
+        jac1 = torch.cat((Jd, Je), dim=-1)
+
+        Jd = jacobian(y2, mlp._decoder.weight)
+        Je = jacobian(y2, mlp._encoder.weight)
+        Jd = Jd.reshape(batch_size, input_size,
+                        mlp._decoder.weight.data.nelement())
+        Je = Je.reshape(batch_size, input_size,
+                        mlp._encoder.weight.data.nelement())
+        jac2 = torch.cat((Jd, Je), dim=-1)
+        loss2 = _neglogprob(x2)
+        loss_grad2 = torch.autograd.grad(loss2.sum(), x2)[0]
+        vec1 = torch.einsum('ijk,ij->k', jac2, loss_grad2) / batch_size
+        grad1 = torch.matmul(jac1, vec1)
+
+        # compute the 2nd term of the ntk svgd
+        vec2 = []
+        for i in range(batch_size):
+            Tr = []
+            for j in range(input_size):
+                grad = torch.autograd.grad(y2[i, j], x2, create_graph=True)[0]
+                Tr.append(grad[i])
+            Tr = torch.stack(Tr, dim=1)
+            Tr = torch.trace(Tr)
+            Jd = jacobian(Tr, mlp._decoder.weight)
+            Je = jacobian(Tr, mlp._encoder.weight)
+            vec2.append(torch.cat((Jd.view(-1), Je.view(-1)), dim=-1))
+        vec2 = torch.stack(vec2, dim=0)
+        vec2 = vec2.mean(0)
+        grad2 = torch.matmul(jac1, vec2)
+
+        svgd1 = grad1 + grad2
+
+        ## compute ntk svgd by SimpleMLP.ntk_svgd
+        x = torch.cat((x1, x2), dim=0)
+        mlp(x)
+        ntk_logp, ntk_grad, _ = mlp.ntk_svgd(x, mlp.hidden_neurons,
+                                             _neglogprob)
+        svgd2 = ntk_logp + ntk_grad
+
+        self.assertArrayEqual(svgd1, svgd2, 1e-6)
 
 
 if __name__ == "__main__":
