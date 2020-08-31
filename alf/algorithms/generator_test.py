@@ -63,12 +63,11 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
-        dict(entropy_regularization=1.0, par_vi='ksd'),
         dict(entropy_regularization=1.0, par_vi='minmax'),
-        #dict(entropy_regularization=1.0, par_vi='gfsf'),
-        #dict(entropy_regularization=1.0, par_vi='svgd'),
-        #dict(entropy_regularization=1.0, par_vi='svgd2'),
-        #dict(entropy_regularization=1.0, par_vi='svgd3'),
+        dict(entropy_regularization=1.0, par_vi='gfsf'),
+        dict(entropy_regularization=1.0, par_vi='svgd'),
+        dict(entropy_regularization=1.0, par_vi='svgd2'),
+        dict(entropy_regularization=1.0, par_vi='svgd3'),
         dict(entropy_regularization=0.0),
         dict(entropy_regularization=0.0, mi_weight=1),
     )

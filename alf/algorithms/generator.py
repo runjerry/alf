@@ -138,8 +138,6 @@ class Generator(Algorithm):
                 self._grad_func = self._svgd_grad3
             elif par_vi == 'minmax':
                 self._grad_func = self._minmax_generator_grad
-            elif par_vi == 'ksd':
-                self._grad_func = self._ksd_grad
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -518,44 +516,6 @@ class Generator(Algorithm):
 
         return loss, loss_propagated
     
-    def _ksd_grad(self, inputs, outputs, loss_func, entropy_regularization):
-        """Compute particle gradients via KSD. Supports resampling for 
-            convienience
-        """
-        assert inputs is None, "\"KSD\" does not support conditional generator"
-        particles = outputs.shape[0] // 2
-        outputs_i, outputs_j = torch.split(outputs, particles, dim=0)
-        loss_j = loss_func(outputs_j)
-        loss_i = loss_func(outputs_i)
-        if isinstance(loss_j, tuple):
-            neglogp_j = loss_j.loss
-            neglogp_i = loss_i.loss
-        else:
-            neglogp_j = loss_j
-            neglogp_i = loss_i
-        loss_grad_j = torch.autograd.grad(neglogp_j.sum(), outputs_j)[0]  # [N2, D]
-        loss_grad_i = torch.autograd.grad(neglogp_i.sum(), outputs_i)[0]  # [N2, D]
-        kappa = self._rbf_func(outputs_j, outputs_i)
-        grad_a = loss_grad_j * kappa[:, None] * loss_grad_i 
-        kappa_grad_j = torch.autograd.grad(
-                kappa.sum(),
-                outputs_j,
-                create_graph=True,
-                retain_graph=True)[0]
-        kappa_grad_i = torch.autograd.grad(
-                kappa.sum(),
-                outputs_i,
-                create_graph=True,
-                retain_graph=True)[0]
-        grad_b = loss_grad_j * kappa_grad_i + loss_grad_i * kappa_grad_j
-        trace_grad = self._approx_jacobian_trace(kappa_grad_j, outputs_i)
-
-        grad = entropy_regularization * grad_b + (grad_a.sum(1) - trace_grad).unsqueeze(1)
-
-        ksd_grad = grad / (particles*particles - 1)
-        loss_propagated = torch.sum(ksd_grad.detach() * outputs_i, dim=-1)
-        return loss_j, loss_propagated
-
     def _approx_jacobian_trace(self, fx, x):
         """Hutchinson's trace Jacobian estimator O(1) call to autograd,
             used by "\"minmax\" method"""
