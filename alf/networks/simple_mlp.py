@@ -31,6 +31,7 @@ class SimpleMLP(Network):
                  input_tensor_spec,
                  hidden_layer_size=64,
                  activation=torch.relu_,
+                 initializer=None,
                  name="SimpleMLP"):
         r"""Create a SimpleMLP.
 
@@ -53,12 +54,14 @@ class SimpleMLP(Network):
             input_size=self._input_size,
             output_size=hidden_layer_size,
             activation=identity,
+            kernel_initializer=initializer,
             use_bias=False,
             use_bn=False)
         self._decoder = FC(
             input_size=hidden_layer_size,
             output_size=self._output_size,
             activation=identity,
+            kernel_initializer=initializer,
             use_bias=False,
             use_bn=False)
         self._hidden_activation = activation

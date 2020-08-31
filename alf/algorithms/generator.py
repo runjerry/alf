@@ -16,6 +16,7 @@
 import gin
 import numpy as np
 import torch
+from torch.nn.init import orthogonal_
 
 from alf.algorithms.algorithm import Algorithm
 from alf.algorithms.mi_estimator import MIEstimator
@@ -150,6 +151,8 @@ class Generator(Algorithm):
             elif par_vi == 'ntk':
                 self._grad_func = self._svgd_grad_ntk
                 self._mlp_hidden_size = max(2, min(512, output_dim))
+                # spec = TensorSpec((self._output_dim, ))
+                # self._mlp = SimpleMLP(spec, hidden_layer_size=self._mlp_hidden_size)
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -461,6 +464,7 @@ class Generator(Algorithm):
         outputs_i, outputs_j = torch.split(outputs, num_particles, dim=0)
         spec = TensorSpec((self._output_dim, ))
         mlp = SimpleMLP(spec, hidden_layer_size=self._mlp_hidden_size)
+        # initializer=orthogonal_)
         mlp(outputs)
         ntk_logp, ntk_grad, loss = mlp.ntk_svgd(outputs, mlp.hidden_neurons,
                                                 loss_func)

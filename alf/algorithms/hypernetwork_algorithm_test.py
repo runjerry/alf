@@ -55,7 +55,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertEqual(x.shape, y.shape)
         self.assertGreater(float(torch.min(x - y)), eps)
 
-    @parameterized.parameters(('gfsf'), ('svgd2'), ('svgd3'), ('ntk'))
+    # @parameterized.parameters(('gfsf'), ('svgd2'), ('svgd3'), ('ntk'))
     def test_bayesian_linear_regression(self,
                                         par_vi='ntk',
                                         num_particles=256,
@@ -153,11 +153,15 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             print("train_iter {}: sampled cov err {}".format(i, scov_err))
             print("train_iter {}: cov err {}".format(i, cov_err))
             print("learned_cov norm: {}".format(learned_cov.norm()))
+            print("learned_cov:")
+            print(learned_cov)
+            print("true_cov:")
+            print(true_cov)
 
-        train_iter = 5000
+        train_iter = 1000000
         for i in range(train_iter):
             _train()
-            if i % 1000 == 0:
+            if i % 5000 == 0:
                 _test(i)
 
         learned_mean = algorithm._generator._net._fc_layers[0].bias
