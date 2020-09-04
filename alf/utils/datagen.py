@@ -59,7 +59,7 @@ def load_notmnist(train_bs=100, test_bs=100, num_workers=0):
     torch.cuda.manual_seed(1)
     kwargs = {
         'num_workers': num_workers,
-        'pin_memory': True,
+        'pin_memory': False,
         'drop_last': False
     }
     path = 'data_nm/'
@@ -67,6 +67,7 @@ def load_notmnist(train_bs=100, test_bs=100, num_workers=0):
         datasets.MNIST(
             path,
             train=True,
+            download=False,
             transform=transforms.Compose([
                 transforms.ToTensor(),
                 transforms.Normalize((0.1307, ), (0.3081, ))

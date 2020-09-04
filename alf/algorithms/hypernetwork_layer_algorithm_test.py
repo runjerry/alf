@@ -18,15 +18,20 @@ import torch
 import torch.nn.functional as F
 
 import alf
+from alf.algorithms.config import TrainerConfig
 from alf.algorithms.hypernetwork_layer_algorithm import HyperNetwork
 from alf.algorithms.hypernetwork_networks import ParamConvNet, ParamNetwork
 from alf.tensor_specs import TensorSpec
-from alf.utils import math_ops
+from alf.utils import math_ops, datagen
 
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+from scipy.stats import entropy as entropy_fn
+from sklearn.metrics import roc_auc_score
+
 
 class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
     def cov(self, data, rowvar=False):
@@ -90,8 +95,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         # plt.show()
         plt.close('all')
 
-    @parameterized.parameters(('minmax', 512, 100),
-                              ('gfsf'), ('svgd2'), ('svgd3'))
+    #@parameterized.parameters(('minmax', 512, 100),
+    #                          ('gfsf'), ('svgd2'), ('svgd3'))
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
                                         particles=512,
@@ -214,7 +219,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             self.plot_predictions(inputs, targets, computed_preds, i)
             self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
         
-        train_iter = 6000
+        train_iter = 500
         for i in range(train_iter):
             _train(i)
             if i % 1000 == 0:
@@ -234,11 +239,115 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLess(mean_err, 0.5)
         self.assertLess(cov_err, 0.5)
 
-    def test_hypernetwork_classification(self):
-        # TODO: out of distribution tests
+    @parameterized.parameters(
+        #('gfsf', 32, 100),
+        #('svgd2', 32, 100),
+        #('svgd3', 32, 100),
+        ('minmax', 32, 100))
+    def test_hypernetwork_classification(self,
+                                         par_vi=None,
+                                         particles=32,
+                                         train_batch_size=100):
         # If simply use a linear classifier with random weights,
         # the cross_entropy loss does not seem to capture the distribution.
-        pass
+
+        # Simple MLP to start with, soft voting for prediction. 
+        # OOD score is the AUCROC of the predictive entropy
+
+        print ('Testing {} method with {} particles'.format(par_vi, particles))
+        
+        # import training data
+        train_inlier, test_inlier = datagen.load_mnist(
+            train_bs=train_batch_size,
+            test_bs=100)
+        train_outlier, test_outlier = datagen.load_notmnist(
+            train_bs=train_batch_size,
+            test_bs=100)
+        
+        particles = 10
+        noise_dim = 256
+        output_dim = len(test_inlier.dataset.classes)
+        input_spec = TensorSpec(shape=test_inlier.dataset[0][0].shape)
+        
+        config = TrainerConfig(
+            root_dir='./',
+            summarize_grads_and_vars=False,
+            debug_summaries=False,
+            )
+
+        algorithm = HyperNetwork(
+            input_tensor_spec=input_spec,
+            conv_layer_params=((6, 5, 1, 2, 4), (16, 5, 1, 0, 2), ),
+            fc_layer_params=((16, True), ),
+            last_layer_param=(output_dim, True),
+            last_activation=math_ops.identity,
+            particles=particles,
+            noise_dim=noise_dim,
+            hidden_layers=(100, 100, ),
+            loss_type='classification',
+            parameterization='layer',
+            par_vi=par_vi,
+            optimizer=alf.optimizers.Adam(lr=1e-4, weight_decay=1e-4),
+            logging_evaluate=True,
+            logging_training=True,
+            config=config)
+
+        algorithm.set_data_loader(train_inlier, test_inlier)
+
+        def _train(i):
+            print ('==> Begin Training Epoch ', i)
+            algorithm.train_iter()
+            algorithm.evaluate()
+
+        def auc_score(inliers, outliers):
+            y_true = np.array([0] * len(inliers) + [1] * len(outliers))
+            y_score = np.concatenate([inliers, outliers])
+            return roc_auc_score(y_true, y_score)
+        
+        def predict_dataset(testset, particles):
+            correct = 0.
+            model_outputs = torch.zeros(particles, len(testset.dataset), output_dim)
+            for batch, (data, target) in enumerate(testset):
+                data = data.to(alf.get_default_device())
+                target = target.to(alf.get_default_device())
+                output, _ = algorithm._param_net(data)
+                probs = F.softmax(output, dim=-1)
+                pred = probs.mean(1).cpu()
+                vote = pred.argmax(-1)
+                correct += vote.eq(target.cpu().view_as(vote)).float().cpu().sum()
+                output = output.transpose(0, 1)
+                model_outputs[:, batch*len(data): (batch+1)*len(data), :] = output
+            return model_outputs, correct
+
+        def _test(i):
+            # Soft voting for now
+            params = algorithm.sample_parameters(particles=100)
+            if par_vi == 'minmax':
+                params = params[0]
+            algorithm._param_net.set_parameters(params)
+            with torch.no_grad():
+                outputs, correct = predict_dataset(
+                    test_inlier,
+                    particles=100)
+            print ('Testing Accuracy: {}%'.format(
+                correct/len(test_inlier.dataset)*100))
+            probs = F.softmax(outputs, -1).mean(0)
+            entropy = entropy_fn(probs.T.cpu().detach().numpy())
+
+            with torch.no_grad():
+                outputs_outlier, correct_outlier = predict_dataset(
+                    test_outlier,
+                    particles=100)
+            probs_outlier = F.softmax(outputs_outlier, -1).mean(0)
+            entropy_outlier = entropy_fn(probs_outlier.T.cpu().detach().numpy())
+            auroc_entropy = auc_score(entropy, entropy_outlier)
+            print ('AUROC score: {}'.format(auroc_entropy))
+
+        train_epochs = 300
+        for i in range(train_epochs):
+            _train(i)
+            _test(i)
+
 
 
 if __name__ == "__main__":

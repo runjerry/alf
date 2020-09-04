@@ -21,12 +21,13 @@ import alf
 from alf.algorithms.hypernetwork_algorithm import HyperNetwork
 from alf.algorithms.hypernetwork_networks import ParamConvNet, ParamNetwork
 from alf.tensor_specs import TensorSpec
-from alf.utils import math_ops
+from alf.utils import math_ops, datagen
 
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt 
 import seaborn as sns
+
 
 class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
     def cov(self, data, rowvar=False):
@@ -200,25 +201,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             self.plot_predictions(inputs, targets, computed_preds, i)
             self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
 
-        # train_iter = 90000
-        # true_mean = beta
-        # for t in range(1, train_iter+1):
-        #     train_inputs = input_spec.randn(outer_dims=(train_batch_size, ))
-        #     noise = torch.randn(train_batch_size, output_dim)
-        #     train_targets = train_inputs @ beta + noise
-        #     _train(train_batch=(train_inputs, train_targets),
-        #            entropy_regularization=1/t)
-        #     if t % 1000 == 0:
-        #         print("-" * 68)
-        #         learned_mean = algorithm._generator._net._fc_layers[0].bias
-        #         mean_err = torch.norm(learned_mean - true_mean.squeeze())
-        #         mean_err = mean_err / torch.norm(true_mean)
-        #         weight = algorithm._generator._net._fc_layers[0].weight
-        #         learned_cov = weight @ weight.t()
-        #         print("train_iter {}: mean err {}".format(t, mean_err))
-        #         print("train_iter {}: learned_cov norm {}".format(t, torch.norm(learned_cov)))
 
-        train_iter = 1000 #40000
+        train_iter = 500 #40000
         for i in range(train_iter):
             _train()
             if i % 1000 == 0:
@@ -238,12 +222,12 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLess(mean_err, 0.01)
         self.assertLess(cov_err, 0.1)
 
-    def test_hypernetwork_classification(self):
+    
+    def test_hypernetwork_classification(self)
         # TODO: out of distribution tests
         # If simply use a linear classifier with random weights,
         # the cross_entropy loss does not seem to capture the distribution.
         pass
-
 
 if __name__ == "__main__":
     alf.test.main()

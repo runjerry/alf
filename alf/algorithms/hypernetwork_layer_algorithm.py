@@ -19,6 +19,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import Callable
+from scipy.stats import entropy as entropy_fn
+from sklearn.metrics import roc_auc_score
 
 import alf
 from alf.algorithms.algorithm import Algorithm
@@ -207,20 +209,20 @@ class HyperNetwork(Algorithm):
                 hidden_layers=hidden_layers,
                 activation=activation,
                 use_fc_bn=use_fc_bn,
+                use_bias=True,
                 optimizer=optimizer,
                 name="Generator")
-            #optimizer = net.default_optimizer
-        
+
         if par_vi == 'minmax':
             critic = EncodingNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
-                fc_layer_params=(512, 512, 512, 512),
+                fc_layer_params=(3000, 3000),
                 activation=torch.nn.functional.relu,
                 last_layer_size=gen_output_dim,
                 last_activation=math_ops.identity,
                 name="Critic")
-            self._d_iters = 5
+            self._d_iters = 30
         else:
             critic = None
 
@@ -266,10 +268,11 @@ class HyperNetwork(Algorithm):
         else:
             raise ValueError("Unsupported loss_type: %s" % loss_type)
 
-    def set_data_loader(self, train_loader, test_loader=None):
+    def set_data_loader(self, train_loader, test_loader=None, outlier=None):
         """Set data loadder for training and testing."""
         self._train_loader = train_loader
         self._test_loader = test_loader
+        self._outlier_loader = outlier
         self._entropy_regularization = 1 / len(train_loader)
 
     def set_particles(self, particles):
@@ -325,6 +328,8 @@ class HyperNetwork(Algorithm):
                         model = 'critic'
                     else:
                         model = 'generator'
+                else:
+                    model = None
                 alg_step = self.train_step((data, target),
                                            particles=particles,
                                            model=model,
@@ -440,6 +445,47 @@ class HyperNetwork(Algorithm):
     def _spectral_norm(self, module):
         if 'weight' in module._parameters:
             torch.nn.utils.spectral_norm(module)
+
+    def _auc_score(self, inliers, outliers):
+        y_true = np.array([0] * len(inliers) + [1] * len(outliers))
+        y_score = np.concatenate([inliers, outliers])
+        return roc_auc_score(y_true, y_score)
+    
+    def _predict_dataset(self, testset, particles=None):
+        if particles is None:
+            particles = self.particles
+        cls = len(testset.dataset.classes)
+        model_outputs = torch.zeros(particles, len(testset.dataset), cls)
+        for batch, (data, target) in enumerate(testset):
+            data = data.to(alf.get_default_device())
+            target = target.to(alf.get_default_device())
+            output, _ = self._param_net(data)
+            output = output.transpose(0, 1)
+            model_outputs[:, batch*len(data): (batch+1)*len(data), :] = output
+        return model_outputs
+
+    def eval_uncertainty(self, particles=None):
+        # Soft voting for now
+        if particles is None:
+            particles = 64
+        params = self.sample_parameters(particles=particles)
+        if self._generator._par_vi == 'minmax':
+            params = params[0]
+        self._param_net.set_parameters(params)
+        with torch.no_grad():
+            outputs = self._predict_dataset(
+                self._test_loader,
+                particles)
+        probs = F.softmax(outputs, -1).mean(0)
+        entropy = entropy_fn(probs.T.cpu().detach().numpy())
+        with torch.no_grad():
+            outputs_outlier = self._predict_dataset(
+                self._outlier_loader,
+                particles)
+        probs_outlier = F.softmax(outputs_outlier, -1).mean(0)
+        entropy_outlier = entropy_fn(probs_outlier.T.cpu().detach().numpy())
+        auroc_entropy = self._auc_score(entropy, entropy_outlier)
+        logging.info("AUROC score: {}".format(auroc_entropy))
 
     def summarize_train(self, loss_info, params, cum_loss=None, avg_acc=None):
         """Generate summaries for training & loss info after each gradient update.

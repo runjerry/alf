@@ -99,14 +99,20 @@ class ParamLayers(Algorithm):
         
         if conv_layer_params is None:
             self._conv_layer_params = None
+            assert len(self._input_tensor_spec.shape) == 1, "Without conv "\
+                "layers, input shape must be [N], not {}".format(
+                    self._input_tensor_spec.shape)
         else:
             self._conv_layer_params = self._convert_inputs_conv(conv_layer_params)
+            assert len(self._input_tensor_spec.shape) >= 3, "If using "\
+                "conv layers, input shape must be [C, H, W], not {}".format(
+                    self._input_tensor_spec.shape)
         if fc_layer_params is None:
             self._fc_layer_params = None
         else:
             self._fc_layer_params = self._convert_inputs_fc(fc_layer_params)
         self._network = []
-
+        
         super(ParamLayers, self).__init__(
                 optimizer=optimizer,
                 name=name)
@@ -141,13 +147,15 @@ class ParamLayers(Algorithm):
                 input_w, output_w, bias = layer
                 bias_dim = output_w if bias else 0
                 if i == 0: # first FC layer or first FC layer after conv
-                    input_w_in, output_w_in = input_size[-2:]
-                    size = input_w_in * output_w_in * input_w * output_w + bias_dim
+                    if conv_layer_params is not None:
+                        input_in = input_size[-2] * input_size[-1] * input_w
+                    else:
+                        input_in = input_size[0]
+                    size = input_in * output_w + bias_dim
                 else:
                     size = input_w * output_w + bias_dim
                 layer_size.append(size)
                 input_size = (output_w,)
-        
         # Handle last layer
         if last_layer_param is not None:
             input_dim = torch.prod(torch.tensor(input_size)).item()
@@ -156,6 +164,7 @@ class ParamLayers(Algorithm):
             size = input_dim * last_layer_w + bias
             layer_size.append(size)
         
+        print (layer_size, sum(layer_size))
         self.layer_encoders = nn.ModuleList([EncodingNetwork(
             self._noise_spec,
             fc_layer_params=self._hidden_layers,
@@ -185,7 +194,10 @@ class ParamLayers(Algorithm):
             (input_wdth, output_width)
         """
         new_inputs_fc = []
-        features_output = self._conv_layer_params[-1][1]
+        if self._conv_layer_params is not None:
+            features_output = self._conv_layer_params[-1][1]
+        else:
+            features_output = self._input_tensor_spec.shape[0]
         for i, layer in enumerate(inputs_fc):
             if i == 0:
                 in_width = features_output

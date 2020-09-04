@@ -367,36 +367,6 @@ class Generator(Algorithm):
                                   -2 * diff / h)  # [Nx, Ny, W]
         return kappa, kappa_grad
 
-    def _imq_func(self, x, y):
-        r"""
-        Compute the imq kernel and its gradient w.r.t the first entry
-        :math: `K(x, y), \nabla_x K(x, y)` used by ksd_grad.
-
-        Args:
-            x (Tensor): set of N particles, shape (Nx x W), where W is the 
-                dimenseion of each particle
-            y (Tensor): set of N particles, shape (Ny x W), where W is the 
-                dimenseion of each particle
-        """
-        c = 1.0
-        beta = -0.5
-        Nx, Dx = x.shape
-        Ny, Dy = y.shape
-        assert Dx == Dy
-        diff = x.unsqueeze(1) - y.unsqueeze(0)  # [Nx, Ny, W]
-        dist_sq = torch.sum(diff**2, -1)  # [Nx, Ny]
-        kappa = (c + dist_sq) ** beta
-        
-        coeff = beta * (c + dist_sq)**(beta - 1)
-
-        kappa_grad = torch.mm(coeff, x) - (x * coeff.sum(1, keepdim=True))
-
-        dist_beta = (c + dist_sq) ** (beta - 2)
-        w = (-2 * Dx * c * beta) + (-4 * beta**2 + (4 - 2*Dx) * beta) * dist_sq
-        trace_grad = dist_beta * w
-
-        return kappa, kappa_grad, trace_grad
-        
     def _score_func(self, x, alpha=1e-5):
         r"""
         Compute the stein estimator of the score function 

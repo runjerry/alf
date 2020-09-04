@@ -129,6 +129,7 @@ class Trainer(object):
 
         self._evaluate = config.evaluate
         self._eval_interval = config.eval_interval
+        self._eval_uncertainty = config.eval_uncertainty
 
         self._summary_interval = config.summary_interval
         self._summaries_flush_secs = config.summaries_flush_secs
@@ -412,13 +413,24 @@ class SLTrainer(Trainer):
         input_tensor_spec = TensorSpec(shape=testset.dataset[0][0].shape)
         output_dim = len(testset.dataset.classes)
 
+        if self._eval_uncertainty == True:
+            trainset_outlier, testset_outlier = create_dataset(
+                dataset_name='notmnist')
+            assert testset_outlier.dataset[0][0].shape == input_tensor_spec.shape, ""\
+                "outlier dataset must have same shape as main dataset, expected "\
+                "{}, but got dataset of shape {}".format(
+                    input_tensor_spec.shape, testset_outlier.dataset[0][0].shape)
+
         self._algorithm = config.algorithm_ctor(
             input_tensor_spec=input_tensor_spec,
             last_layer_param=(output_dim, True),
             last_activation=math_ops.identity,
             config=config)
 
-        self._algorithm.set_data_loader(trainset, testset)
+        self._algorithm.set_data_loader(
+            trainset,
+            testset,
+            outlier=testset_outlier)
 
     @staticmethod
     def progress():
@@ -447,6 +459,9 @@ class SLTrainer(Trainer):
 
             if self._evaluate and (epoch_num + 1) % self._eval_interval == 0:
                 self._algorithm.evaluate()
+            
+            if self._eval_uncertainty and (epoch_num + 1) % self._eval_interval == 0:
+                self._algorithm.eval_uncertainty()
 
             if epoch_num == begin_epoch_num:
                 # We need to wait for one iteration to get the operative args
@@ -476,6 +491,8 @@ class SLTrainer(Trainer):
             if (self._num_epochs and epoch_num >= self._num_epochs):
                 if self._evaluate:
                     self._algorithm.evaluate()
+                if self._eval_uncertainty:
+                    self._algorithm.eval_uncertianty()
                 break
 
             if self._num_epochs and epoch_num >= time_to_checkpoint:
