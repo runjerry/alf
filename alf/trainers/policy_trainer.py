@@ -420,6 +420,8 @@ class SLTrainer(Trainer):
                 "outlier dataset must have same shape as main dataset, expected "\
                 "{}, but got dataset of shape {}".format(
                     input_tensor_spec.shape, testset_outlier.dataset[0][0].shape)
+        else:
+            testset_outlier = None
 
         self._algorithm = config.algorithm_ctor(
             input_tensor_spec=input_tensor_spec,
