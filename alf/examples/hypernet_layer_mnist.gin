@@ -1,16 +1,16 @@
 import alf.algorithms.hypernetwork_layer_algorithm
 
 # dataset config
-create_dataset.dataset_name='mnist'
-create_dataset.train_batch_size=100
+create_dataset.dataset_name='mnist_inlier'
+create_dataset.train_batch_size=50
 create_dataset.test_batch_size=100
 
 # Lenet for MNIST
-#CONV_LAYER_PARAMS = ((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
-CONV_LAYER_PARAMS = ((6, 5, 1, 2, 4), (16, 5, 1, 0))
-#FC_LAYER_PARAMS = ((84, True), )
-FC_LAYER_PARAMS = ((144, True), )
-HIDDEN_LAYERS = (100, 100)
+CONV_LAYER_PARAMS = ((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
+#CONV_LAYER_PARAMS = ((6, 5, 1, 2, 4), (16, 5, 1, 0))
+FC_LAYER_PARAMS = ((84, True), )
+#FC_LAYER_PARAMS = ((144, True), )
+HIDDEN_LAYERS = (512, 1024)
 
 hypernet/Adam.lr=1e-4
 hypernet/Adam.weight_decay=1e-4
@@ -22,9 +22,10 @@ HyperNetwork.hidden_layers=%HIDDEN_LAYERS
 HyperNetwork.particles=10
 HyperNetwork.noise_dim=256
 
-HyperNetwork.parameterization = 'layer'
+HyperNetwork.parameterization = 'network'
 HyperNetwork.par_vi = 'minmax'
 HyperNetwork.loss_type = 'classification'
+HyperNetwork.use_function_values = False
 HyperNetwork.optimizer=@hypernet/Adam()
 HyperNetwork.logging_training=True
 HyperNetwork.logging_evaluate=True

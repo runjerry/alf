@@ -95,8 +95,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         # plt.show()
         plt.close('all')
 
-    #@parameterized.parameters(('minmax', 512, 100),
-    #                          ('gfsf'), ('svgd2'), ('svgd3'))
+    @parameterized.parameters(('minmax', 512, 100),
+                              ('gfsf'), ('svgd2'), ('svgd3'))
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
                                         particles=512,
@@ -127,7 +127,6 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             inputs.t() @ inputs)  # + torch.eye(input_size))
         true_mean = true_cov @ inputs.t() @ targets
         noise_dim = 3
-        d_iters = 3
         algorithm = HyperNetwork(
             input_tensor_spec=input_spec,
             last_layer_param=(output_dim, False),
@@ -154,28 +153,16 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             if entropy_regularization is None:
                 entropy_regularization = train_batch_size / batch_size
 
-            if par_vi == 'minmax':
-                if i % (d_iters + 1):
-                    model = 'critic'
-                else:
-                    model = 'generator'
-            else:
-                model = None
-
             alg_step = algorithm.train_step(
                 inputs=(train_inputs, train_targets),
                 entropy_regularization=entropy_regularization,
-                model=model,
                 particles=particles)
 
             algorithm.update_with_gradient(alg_step.info)
-            algorithm._generator.after_update(alg_step.info)
         
         def _test(i):
 
             params = algorithm.sample_parameters(particles=200)
-            if par_vi == 'minmax':
-                params = params[0]
             computed_mean = params.mean(0)
             computed_cov = self.cov(params)
 
@@ -219,7 +206,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             self.plot_predictions(inputs, targets, computed_preds, i)
             self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
         
-        train_iter = 500
+        train_iter = 6000
         for i in range(train_iter):
             _train(i)
             if i % 1000 == 0:

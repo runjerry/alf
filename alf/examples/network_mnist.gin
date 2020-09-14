@@ -1,7 +1,7 @@
 import alf.algorithms.forward_network_algorithm
 
 # dataset config
-create_dataset.dataset_name='mnist'
+create_dataset.dataset_name='mnist_inlier'
 create_dataset.train_batch_size=50
 create_dataset.test_batch_size=100
 
@@ -17,8 +17,8 @@ ForwardNetwork.conv_layer_params=%CONV_LAYER_PARAMS
 ForwardNetwork.fc_layer_params=%FC_LAYER_PARAMS
 ForwardNetwork.use_fc_bn=False
 ForwardNetwork.use_conv_bn=False
-ForwardNetwork.ensemble_vote='hard'
-ForwardNetwork.ensemble_size=1
+ForwardNetwork.ensemble_vote='soft'
+ForwardNetwork.ensemble_size=5
 
 ForwardNetwork.loss_type = 'classification'
 ForwardNetwork.optimizer=@forwardnet/Adam()

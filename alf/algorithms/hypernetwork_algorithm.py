@@ -224,11 +224,14 @@ class HyperNetwork(Algorithm):
         else:
             raise ValueError("Unsupported loss_type: %s" % loss_type)
 
-    def set_data_loader(self, train_loader, test_loader=None):
+    def set_data_loader(self, train_loader, test_loader=None, outlier=None):
         """Set data loadder for training and testing."""
         self._train_loader = train_loader
         self._test_loader = test_loader
+        self._outlier_train = outlier[0]
+        self._outlier_test = outlier[1]
         self._entropy_regularization = 1 / len(train_loader)
+
 
     def set_particles(self, particles):
         """Set the number of particles to sample through one forward

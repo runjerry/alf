@@ -1057,7 +1057,7 @@ class Algorithm(nn.Module):
             )
             all_params.extend(params)
             optimizer.step()
-
+        
         all_params = [(self._param_to_name[p], p) for p in all_params]
         return loss_info, all_params
 

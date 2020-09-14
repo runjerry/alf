@@ -97,6 +97,7 @@ class ForwardNetwork(Algorithm):
                  ensemble_vote=None,
                  loss_type="classification",
                  optimizer=None,
+                 ignore_module=None,
                  logging_network=False,
                  logging_training=False,
                  logging_evaluate=False,
@@ -150,7 +151,6 @@ class ForwardNetwork(Algorithm):
             debug_summaries (bool): True if debug summaries should be created.
             name (str): Name of this algorithm.
         """
-        
         super().__init__(train_state_spec=(), optimizer=optimizer, name=name)
         
         assert (ensemble_size >= 1 and isinstance(ensemble_size, int)), " "\
@@ -197,7 +197,7 @@ class ForwardNetwork(Algorithm):
         self._ensemble_size = ensemble_size
         assert ensemble_vote in ['soft', 'hard', None], "voting only supports "\
             "\"soft\", \"hard\", None"
-
+        
         self._ensemble_vote = ensemble_vote
         if loss_type == "classification":
             self._vote = self._classification_vote
@@ -209,17 +209,35 @@ class ForwardNetwork(Algorithm):
         self._logging_training=logging_training
         self._logging_evaluate=logging_evaluate
         self._config = config
+        self._ignore_module = ignore_module
+
+    def _trainable_attributes_to_ignore(self):
+        return ['_ignore_module']
 
     def set_data_loader(self, train_loader, test_loader=None, outlier=None):
         """ Set data loader for training and testing. """
         self._train_loader = train_loader
         self._test_loader = test_loader
-        self._outlier_loader = outlier
-
-
-    def predict_with_update(self, inputs, state=None):
-        output, state = self._encoder(time_step.observation, state=state)
-        return AlgStep(output=output, state=state, info=LossInfo())
+        self._outlier_train = outlier[0]
+        self._outlier_test = outlier[1]
+    
+    def predict_with_update(self, inputs, loss_func, state=None):
+        """ Does one step for prediction with update, used for 
+            minmax asvgd critic training
+        """
+        outputs, _ = self._net(inputs)
+        loss, loss_propagated = self._minmax_critic_grad(
+            inputs,
+            outputs,
+            loss_func)
+        alg_step = AlgStep(
+            output=outputs,
+            state=state,
+            info=LossInfo(
+                loss=loss_propagated,
+                extra=loss))
+        self.update_with_gradient(alg_step.info)
+        return alg_step
 
     def train_iter(self, state=None):
         """ Predict ensemble outputs for inputs """
@@ -335,7 +353,7 @@ class ForwardNetwork(Algorithm):
         return roc_auc_score(y_true, y_score)
     
     def _predict_dataset(self, testset):
-        cls = len(testset.dataset.classes)
+        cls = len(testset.dataset.dataset.classes)
         model_outputs = torch.zeros(
             self._ensemble_size,
             len(testset.dataset),
@@ -357,7 +375,7 @@ class ForwardNetwork(Algorithm):
         probs = F.softmax(outputs, -1).mean(0)
         entropy = entropy_fn(probs.T.cpu().detach().numpy())
         with torch.no_grad():
-            outputs_outlier = self._predict_dataset(self._outlier_loader)
+            outputs_outlier = self._predict_dataset(self._outlier_test)
         probs_outlier = F.softmax(outputs_outlier, -1).mean(0)
         entropy_outlier = entropy_fn(probs_outlier.T.cpu().detach().numpy())
         auroc_entropy = self._auc_score(entropy, entropy_outlier)
@@ -387,4 +405,40 @@ class ForwardNetwork(Algorithm):
             alf.summary.scalar(name='train_epoch/neglogprob', data=cum_loss)
         if avg_acc is not None:
             alf.summary.scalar(name='train_epoch/avg_acc', data=avg_acc)
+     
+    def _approx_jacobian_trace(self, fx, x):
+        """Hutchinson's trace Jacobian estimator O(1) call to autograd,
+            used by "\"minmax\" method"""
+        eps = torch.randn_like(fx)
+        jvp = torch.autograd.grad(
+                fx,
+                x,
+                grad_outputs=eps,
+                retain_graph=True,
+                create_graph=True)[0]
+        if eps.shape[-1] == jvp.shape[-1]:
+            tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
+        else:
+            tr_jvp = torch.einsum('bi,bj->b', jvp, eps)
+        return tr_jvp
 
+    def _minmax_critic_grad(self, net_outputs, critic_outputs, loss_func):
+        """update direction \phi^*(x) for minmax amortized svgd"""
+        
+        loss_inputs = net_outputs
+        loss = loss_func(loss_inputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        loss_grad = torch.autograd.grad(neglogp.sum(), net_outputs)[0]  # [N, D]
+        log_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
+        tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
+        lamb = 10.
+        stein_pq = log_p_f - tr_critic.unsqueeze(1) # [n x 1]
+        l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
+        adv_grad = -1 * stein_pq.mean() + l2_penalty
+        loss_propagated = adv_grad
+        
+        return loss, loss_propagated
+    

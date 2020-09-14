@@ -23,6 +23,8 @@ import alf
 from alf.algorithms.generator import Generator
 from alf.networks import Network
 from alf.tensor_specs import TensorSpec
+from alf.algorithms.forward_network_algorithm import ForwardNetwork
+from alf.utils import math_ops
 
 
 class Net(Network):
@@ -95,6 +97,17 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             mi_weight=mi_weight,
             par_vi=par_vi,
             optimizer=alf.optimizers.AdamTF(lr=1e-3))
+        
+        if par_vi == 'minmax':
+            critic = ForwardNetwork(
+                TensorSpec(shape=(dim, ) ),
+                fc_layer_params=(100, 100),
+                last_layer_param=dim,
+                last_activation=math_ops.identity,
+                optimizer=alf.optimizers.AdamTF(lr=1e-3))
+            self._d_iters = 5
+        else:
+            critic = None
 
         var = torch.tensor([1, 4], dtype=torch.float32)
         precision = 1. / var
@@ -106,17 +119,19 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
 
         def _train(i):
             if par_vi == 'minmax':
-                if i % (d_iters+1):
-                    model = 'critic'
-                else:
-                    model = 'generator'
+                for _ in range(self._d_iters):
+                    outputs, _ = generator._predict(batch_size=batch_size)
+                    critic.predict_with_update(outputs, _neglogprob)
+                outputs, _ = generator._predict(batch_size=batch_size)
+                critic_outputs = critic._net(outputs)[0].detach()
+                outputs = (outputs, critic_outputs)
             else:
-                model = None
+                outputs = None
             alg_step = generator.train_step(
                 inputs=None,
+                outputs=outputs,
                 loss_func=_neglogprob,
-                batch_size=batch_size,
-                model=model)
+                batch_size=batch_size)
             generator.update_with_gradient(alg_step.info)
             generator.after_update(alg_step.info)
 

@@ -29,6 +29,7 @@ from alf.data_structures import AlgStep, LossInfo, namedtuple
 from alf.algorithms.generator import Generator
 from alf.algorithms.hypernetwork_networks import ParamNetwork
 from alf.algorithms.hypernetwork_layer_generator import ParamLayers
+from alf.algorithms.forward_network_algorithm import ForwardNetwork
 from alf.networks import EncodingNetwork
 from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops, summary_utils
@@ -63,7 +64,7 @@ def neglogprob(inputs, param_net, loss_type, params):
         loss_func = classification_loss
     else:
         raise ValueError("Unsupported loss_type: %s" % loss_type)
-
+    
     param_net.set_parameters(params)
     particles = params.shape[0]
     data, target = inputs
@@ -71,6 +72,24 @@ def neglogprob(inputs, param_net, loss_type, params):
     target = target.unsqueeze(1).expand(*target.shape[:1], particles,
                                         *target.shape[1:])
     return loss_func(output, target)
+
+def neglogprob2(inputs, outputs, loss_type, params=None):
+    """ 
+    computes the NLL for the corresponding model. This version
+    does not use the ``params`` argument, and takes predictions as inputs
+    """
+    if loss_type == 'regression':
+        loss_func = regression_loss
+    elif loss_type == 'classification':
+        loss_func = classification_loss
+    else:
+        raise ValueError("Unsupported loss_type: %s" % loss_type)
+    
+    data, target = inputs
+    particles = outputs.shape[1]
+    target = target.unsqueeze(1).expand(*target.shape[:1], particles,
+                                        *target.shape[1:])
+    return loss_func(outputs, target)
 
 
 @gin.configurable
@@ -110,6 +129,7 @@ class HyperNetwork(Algorithm):
                  particles=10,
                  entropy_regularization=1.,
                  parameterization='layer',
+                 use_function_values=False,
                  loss_type="classification",
                  voting="soft",
                  par_vi="svgd",
@@ -157,6 +177,8 @@ class HyperNetwork(Algorithm):
                 A parameterization of ``network`` uses a single generator to
                 generate all the weights at once. A parameterization of ``layer``
                 uses one generator for each layer of output parameters.
+            use_function_values (bool): whether or not to use parameters as the
+                particles of interest, or their function values
 
             Args for training and testing
             ====================================================================
@@ -214,15 +236,16 @@ class HyperNetwork(Algorithm):
                 name="Generator")
 
         if par_vi == 'minmax':
-            critic = EncodingNetwork(
+            critic = ForwardNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
-                fc_layer_params=(3000, 3000),
+                fc_layer_params=(100, 100),
                 activation=torch.nn.functional.relu,
-                last_layer_size=gen_output_dim,
+                last_layer_param=gen_output_dim,
                 last_activation=math_ops.identity,
+                optimizer=alf.optimizers.Adam(lr=1e-3),
                 name="Critic")
-            self._d_iters = 30
+            self._d_iters = 5
         else:
             critic = None
 
@@ -244,13 +267,14 @@ class HyperNetwork(Algorithm):
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
-            critic=critic,
             optimizer=None,
             name=name)
         
         self._param_net = param_net
+        self._critic = critic
         self._particles = particles
         self._entropy_regularization = entropy_regularization
+        self._use_function_values = use_function_values
         self._train_loader = None
         self._test_loader = None
         self._use_fc_bn = use_fc_bn
@@ -267,12 +291,13 @@ class HyperNetwork(Algorithm):
             self._vote = self._regression_vote
         else:
             raise ValueError("Unsupported loss_type: %s" % loss_type)
-
+    
     def set_data_loader(self, train_loader, test_loader=None, outlier=None):
         """Set data loadder for training and testing."""
         self._train_loader = train_loader
         self._test_loader = test_loader
-        self._outlier_loader = outlier
+        self._outlier_train = outlier[0]
+        self._outlier_test = outlier[1]
         self._entropy_regularization = 1 / len(train_loader)
 
     def set_particles(self, particles):
@@ -323,19 +348,10 @@ class HyperNetwork(Algorithm):
             for batch_idx, (data, target) in enumerate(self._train_loader):
                 data = data.to(alf.get_default_device())
                 target = target.to(alf.get_default_device())
-                if self._generator._par_vi == 'minmax':
-                    if batch_idx % (self._d_iters + 1):
-                        model = 'critic'
-                    else:
-                        model = 'generator'
-                else:
-                    model = None
                 alg_step = self.train_step((data, target),
                                            particles=particles,
-                                           model=model,
                                            state=state)
                 loss_info, params = self.update_with_gradient(alg_step.info)
-                self._generator.after_update(alg_step.info)
                 loss += loss_info.extra.generator.loss
                 if self._loss_type == 'classification':
                     avg_acc.append(alg_step.info.extra.generator.extra)
@@ -353,14 +369,12 @@ class HyperNetwork(Algorithm):
                    inputs,
                    particles=None,
                    entropy_regularization=None,
-                   model=None,
                    state=None):
         """Perform one batch of training computation.
 
         Args:
             inputs (nested Tensor): input training data. 
             particles (int): number of sampled particles. 
-            model (str): 
             state: not used
 
         Returns:
@@ -369,16 +383,34 @@ class HyperNetwork(Algorithm):
                 info: LossInfo
         """
         params = self.sample_parameters(particles=particles)
+
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
-
+        
+        if self._use_function_values:
+            self._param_net.set_parameters(params)
+            outputs, _ = self._param_net(inputs[0])
+            loss_func = functools.partial(neglogprob2, inputs, outputs,
+                self._loss_type)
+        else:
+            outputs = params
+            loss_func = functools.partial(neglogprob, inputs, self._param_net,
+                self._loss_type)
+        
+        if self._generator._par_vi == 'minmax':
+            for i in range(self._d_iters):
+                self._critic.predict_with_update(outputs, loss_func)
+                outputs = self.sample_parameters(particles=particles)
+            
+            outputs = self.sample_parameters(particles=particles)
+            critic_outputs = self._critic._net(outputs)[0]
+            outputs = (outputs, critic_outputs.detach())
+        
         return self._generator.train_step(
             inputs=None,
-            loss_func=functools.partial(neglogprob, inputs, self._param_net,
-                                        self._loss_type),
-            outputs=params,
+            loss_func=loss_func,
+            outputs=outputs,
             entropy_regularization=entropy_regularization,
-            model=model,
             state=())
 
     def evaluate(self, particles=None):
@@ -429,7 +461,7 @@ class HyperNetwork(Algorithm):
         correct = vote.eq(target.cpu().view_as(vote)).float().cpu().sum()
         target = target.unsqueeze(1).expand(*target.shape[:1], particles,
                                             *target.shape[1:])
-        loss = classification_loss(output.transpose(1, 2), target)
+        loss = classification_loss(output, target)
         return loss, correct
 
     def _regression_vote(self, output, target):
@@ -454,7 +486,7 @@ class HyperNetwork(Algorithm):
     def _predict_dataset(self, testset, particles=None):
         if particles is None:
             particles = self.particles
-        cls = len(testset.dataset.classes)
+        cls = len(testset.dataset.dataset.classes)
         model_outputs = torch.zeros(particles, len(testset.dataset), cls)
         for batch, (data, target) in enumerate(testset):
             data = data.to(alf.get_default_device())
@@ -467,7 +499,7 @@ class HyperNetwork(Algorithm):
     def eval_uncertainty(self, particles=None):
         # Soft voting for now
         if particles is None:
-            particles = 64
+            particles = 100
         params = self.sample_parameters(particles=particles)
         if self._generator._par_vi == 'minmax':
             params = params[0]
@@ -480,7 +512,7 @@ class HyperNetwork(Algorithm):
         entropy = entropy_fn(probs.T.cpu().detach().numpy())
         with torch.no_grad():
             outputs_outlier = self._predict_dataset(
-                self._outlier_loader,
+                self._outlier_test,
                 particles)
         probs_outlier = F.softmax(outputs_outlier, -1).mean(0)
         entropy_outlier = entropy_fn(probs_outlier.T.cpu().detach().numpy())

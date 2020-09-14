@@ -411,28 +411,28 @@ class SLTrainer(Trainer):
 
         trainset, testset = create_dataset()
         input_tensor_spec = TensorSpec(shape=testset.dataset[0][0].shape)
-        output_dim = len(testset.dataset.classes)
-
-        if self._eval_uncertainty == True:
-            trainset_outlier, testset_outlier = create_dataset(
-                dataset_name='notmnist')
-            assert testset_outlier.dataset[0][0].shape == input_tensor_spec.shape, ""\
-                "outlier dataset must have same shape as main dataset, expected "\
-                "{}, but got dataset of shape {}".format(
-                    input_tensor_spec.shape, testset_outlier.dataset[0][0].shape)
+        if hasattr(testset.dataset, 'dataset'):
+            output_dim = len(testset.dataset.dataset.classes)
         else:
-            testset_outlier = None
+            output_dim = len(testset.dataset.classes)
 
         self._algorithm = config.algorithm_ctor(
             input_tensor_spec=input_tensor_spec,
             last_layer_param=(output_dim, True),
             last_activation=math_ops.identity,
             config=config)
+        
+        if self._eval_uncertainty:
+            outlier_train, outlier_test = create_dataset(
+                dataset_name='mnist_outlier')
+        else:
+            outlier_train = None
+            outlier_test = None
 
         self._algorithm.set_data_loader(
             trainset,
             testset,
-            outlier=testset_outlier)
+            outlier=(outlier_train, outlier_test))
 
     @staticmethod
     def progress():

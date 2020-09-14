@@ -90,7 +90,6 @@ class Generator(Algorithm):
                  entropy_regularization=0.,
                  mi_weight=None,
                  mi_estimator_cls=MIEstimator,
-                 critic=None,
                  par_vi="gfsf",
                  optimizer=None,
                  name="Generator"):
@@ -112,8 +111,6 @@ class Generator(Algorithm):
             mi_estimator_cls (type): the class of mutual information estimator
                 for maximizing the mutual information between [noise, inputs]
                 and [outputs, inputs].
-            critic (Network): network used for learning the stein discrepancy 
-                in the case of par_vi == ``minmax``.
             par_vi (string): ParVI methods, options are
                 [``svgd``, ``svgd2``, ``svgd3``, ``gfsf``, ``minmax``],
                 note that for conditional case, i.e., generating from [noise, inputs],
@@ -137,7 +134,7 @@ class Generator(Algorithm):
             elif par_vi == 'svgd3':
                 self._grad_func = self._svgd_grad3
             elif par_vi == 'minmax':
-                self._grad_func = self._minmax_generator_grad
+                self._grad_func = self._minmax_grad
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -157,20 +154,6 @@ class Generator(Algorithm):
                 last_activation=math_ops.identity,
                 name="Generator")
 
-        if par_vi == 'minmax':
-            if critic is None:
-                critic = EncodingNetwork(
-                    TensorSpec(shape=(output_dim, )),
-                    conv_layer_params=None,
-                    fc_layer_params=(256, 256, ),
-                    activation=torch.nn.functional.relu,
-                    last_layer_size=output_dim,
-                    last_activation=math_ops.identity,
-                    name="Critic")
-            critic.apply(self._spectral_norm)
-        else:
-            critic = None
-
         self._mi_estimator = None
         self._input_tensor_spec = input_tensor_spec
         if mi_weight is not None:
@@ -182,7 +165,6 @@ class Generator(Algorithm):
                 x_spec, y_spec, sampler='shift')
             self._mi_weight = mi_weight
         self._net = net
-        self._critic = critic
 
         self._predict_net = None
         self._net_moving_average_rate = net_moving_average_rate
@@ -223,8 +205,6 @@ class Generator(Algorithm):
             outputs = self._predict_net(gen_inputs)[0]
         else:
             outputs = self._net(gen_inputs)[0]
-        if self._par_vi == 'minmax':
-            outputs = (outputs, self._critic(outputs)[0])
         return outputs, gen_inputs
 
     def predict_step(self,
@@ -259,7 +239,6 @@ class Generator(Algorithm):
                    outputs=None,
                    batch_size=None,
                    entropy_regularization=None,
-                   model=None,
                    state=None):
         """
         Args:
@@ -270,24 +249,12 @@ class Generator(Algorithm):
                 shape [batch_size] as a loss for optimizing the generator
             batch_size (int): batch_size. Must be provided if inputs is None.
                 Its is ignored if inputs is not None
-            model (str): indicator of model to train for "\"minmax\" method. 
-                may be either ``critic`` or ``generator``. 
             state: not used
         Returns:
             AlgorithmStep:
                 outputs: Tensor with shape (batch_size, dim)
                 info: LossInfo
         """
-        if model is not None:
-            assert self._critic is not None, "critic network has not been "\
-                "initialized, check that par_vi is set to `minmax`"
-            assert model in ['critic', 'generator'], "model argument must be "\
-                "either `critic` or `generator`, got {}".format(model)
-            if model == 'critic':
-                self._grad_func = self._minmax_critic_grad
-            else:
-                self._grad_func = self._minmax_generator_grad
-        
         if outputs is None:
             outputs, gen_inputs = self._predict(inputs, batch_size=batch_size)
         if entropy_regularization is None:
@@ -435,7 +402,6 @@ class Generator(Algorithm):
         else:
             neglogp = loss
         loss_grad = torch.autograd.grad(neglogp.sum(), outputs_j)[0]  # [Nj, D]
-
         # [Nj, Ni], [Nj, Ni, D]
         kernel_weight, kernel_grad = self._rbf_func2(outputs_j, outputs_i)
         kernel_logp = torch.matmul(kernel_weight.t(),
@@ -479,56 +445,20 @@ class Generator(Algorithm):
         else:
             neglogp = loss
         loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
-
+        
+        #if outputs.dim() == 3:  # [B, N, D]
+        #    outputs = outputs.transpose(0, 1)
+        #    outputs = outputs.reshape(outputs.shape[0], -1)
+        #    loss_grad = loss_grad.transpose(0, 1)
+        #    loss_grad = loss_grad.reshape(loss_grad.shape[0], -1)
         logq_grad = self._score_func(outputs)
         grad = loss_grad - entropy_regularization * logq_grad
+        # print (loss_grad.shape, logq_grad.shape, grad.shape)
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
-        return loss, loss_propagated
+        return loss, loss_propagated 
     
-    def _approx_jacobian_trace(self, fx, x):
-        """Hutchinson's trace Jacobian estimator O(1) call to autograd,
-            used by "\"minmax\" method"""
-        eps = torch.randn_like(fx)
-        jvp = torch.autograd.grad(
-                fx,
-                x,
-                grad_outputs=eps,
-                retain_graph=True,
-                create_graph=True)[0]
-        if eps.shape[-1] == jvp.shape[-1]:
-            tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
-        else:
-            tr_jvp = torch.einsum('bi,bj->b', jvp, eps)
-
-        return tr_jvp
-    
-    def _minmax_critic_grad(self, inputs, outputs, loss_func, entropy_regularization):
-        """update direction \phi^*(x) for minmax amortized svgd"""
-        assert inputs is None, "\"minmax\" does not support conditional generator"
-        net_outputs, critic_outputs = outputs  # x, f(x)
-        loss_inputs = net_outputs
-        loss = loss_func(loss_inputs)
-        if isinstance(loss, tuple):
-            neglogp = loss.loss
-        else:
-            neglogp = loss
-        loss_grad = torch.autograd.grad(
-                neglogp.sum(),
-                net_outputs)[0]  # [N, D]
-
-        log_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
-        tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
-        for p in self._net.parameters():
-            p.requires_grad = False
-        lamb = 10.
-        stein_pq = log_p_f - tr_critic.unsqueeze(1) # [n x 1]
-        l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
-        adv_grad = -1 * stein_pq.mean() + l2_penalty
-        loss_propagated = adv_grad
-        return loss, loss_propagated
-    
-    def _minmax_generator_grad(self, inputs, outputs, loss_func, entropy_regularization):
+    def _minmax_grad(self, inputs, outputs, loss_func, entropy_regularization):
         """for "\"minmax\", compute particle updates w.r.t generator"""    
         assert inputs is None, "\"minmax\" does not support conditional generator"
         net_outputs, critic_outputs = outputs  # x, f(x) 
@@ -544,6 +474,3 @@ class Generator(Algorithm):
     def after_update(self, training_info):
         if self._predict_net:
             self._predict_net_updater()
-        if self._par_vi == 'minmax':
-            for param in self._net.parameters():
-                param.requires_grad = True
