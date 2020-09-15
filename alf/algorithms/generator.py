@@ -16,12 +16,15 @@
 import gin
 import numpy as np
 import torch
+import torch.nn.functional as F
 
+import alf
 from alf.algorithms.algorithm import Algorithm
 from alf.algorithms.mi_estimator import MIEstimator
 from alf.data_structures import AlgStep, LossInfo, namedtuple
 import alf.nest as nest
 from alf.networks import Network, EncodingNetwork
+from alf.networks.relu_mlp import ReluMLP
 from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops
 from alf.utils.averager import AdaptiveAverager
@@ -31,14 +34,101 @@ GeneratorLossInfo = namedtuple("GeneratorLossInfo",
 
 
 @gin.configurable
+class CriticAlgorithm(Algorithm):
+    """Wrap a critic network as an Algorithm for flexible gradient updates
+    called by the Generator.
+    """
+
+    def __init__(self,
+                 input_tensor_spec,
+                 output_dim=1,
+                 hidden_layers=(3, 3),
+                 net: Network = None,
+                 spectral_norm=False,
+                 optimizer=None,
+                 name="CriticAlgorithm"):
+        """Create a CriticAlgorithm.
+
+        Args:
+            input_tensor_spec (TensorSpec): spec of inputs. 
+            output_dim (int): dimension of output, default value is 1.
+            hidden_layers (tuple): size of hidden layers.
+            net (Network): network for predicting outputs from inputs.
+                If None, a default one with hidden_layers will be created
+            spectral_norm (bool): whether or not apply spectral norm on net.
+            optimizer (torch.optim.Optimizer): (optional) optimizer for training.
+            name (str): name of this CriticAlgorithm.
+        """
+        super().__init__(train_state_spec=(), optimizer=optimizer, name=name)
+
+        if net is None:
+            if output_dim == 1:
+                self._output_dim = output_dim
+                net = EncodingNetwork(
+                    input_tensor_spec=input_tensor_spec,
+                    fc_layer_params=hidden_layers,
+                    last_layer_size=output_dim,
+                    last_activation=math_ops.identity,
+                    name='Critic')
+            else:
+                self._output_dim = input_tensor_spec.shape[0]
+                net = ReluMLP(
+                    input_tensor_spec=input_tensor_spec,
+                    hidden_layers=hidden_layers,
+                    name="Critic")
+        if spectral_norm:
+            net.apply(self._spectral_norm)
+
+        self._net = net
+
+    def _spectral_norm(self, module):
+        if 'weight' in module._parameters:
+            torch.nn.utils.spectral_norm(module)
+
+    def _reset_parameters(self, module):
+        if hasattr(module, '_reset_parameters'):
+            module._reset_parameters()
+
+    def reset_net_parameters(self):
+        self._net.apply(self._reset_parameters)
+
+    def predict_step(self,
+                     inputs,
+                     state=None,
+                     compute_jac=False,
+                     training=False):
+        """Predict for one step of inputs.
+
+        Args:
+            inputs (Tensor): inputs for prediction.
+            state: not used.
+            compute_jac (bool): whether to compute the diagonal of the 
+                jacobian matrix.
+
+        Returns:
+            AlgStep:
+            - output (Tensor): prediction only if compute_jac is False.
+                (prediction, gradients) if compute_jac is True. 
+            - state: not used.
+        """
+        outputs = self._net(inputs)[0]
+        if compute_jac:
+            if self._output_dim == 1:
+                jac = torch.autograd.grad(
+                    outputs.sum(), inputs, create_graph=training)[0]
+            else:
+                jac = self._net.compute_jac_diag(inputs)
+            outputs = (outputs, jac)
+        return AlgStep(output=outputs, state=(), info=())
+
+
+@gin.configurable
 class Generator(Algorithm):
     """Generator
 
     Generator generates outputs given `inputs` (can be None) by transforming
     a random noise and input using `net`:
 
-        outputs = net([noise, input]) if input is not None
-                  else net(noise)
 
     The generator is trained to minimize the following objective:
 
@@ -80,19 +170,26 @@ class Generator(Algorithm):
     and Maximization <https://arxiv.org/pdf/1808.06670.pdf>`_
     """
 
-    def __init__(self,
-                 output_dim,
-                 noise_dim=32,
-                 input_tensor_spec=None,
-                 hidden_layers=(256, ),
-                 net: Network = None,
-                 net_moving_average_rate=None,
-                 entropy_regularization=0.,
-                 mi_weight=None,
-                 mi_estimator_cls=MIEstimator,
-                 par_vi="gfsf",
-                 optimizer=None,
-                 name="Generator"):
+    def __init__(
+            self,
+            output_dim,
+            noise_dim=32,
+            input_tensor_spec=None,
+            hidden_layers=(256, ),
+            net: Network = None,
+            net_moving_average_rate=None,
+            entropy_regularization=0.,
+            mi_weight=None,
+            mi_estimator_cls=MIEstimator,
+            par_vi="gfsf",
+            critic_l2_weight=1.,
+            critic_spectral_norm=False,
+            num_critic_iter=10,
+            # num_critic_outer_iter=10,
+            optimizer=None,
+            critic_optimizer=None,
+            # potential_optimizer=None,
+            name="Generator"):
         r"""Create a Generator.
 
         Args:
@@ -127,10 +224,20 @@ class Generator(Algorithm):
                     involves a kernel matrix inversion, so computationally most
                     expensive, but in some case the convergence seems faster 
                     than svgd approaches.
+            critic_l2_weight (float): weight of l2 penalty for training critic.
+            critic_spectral_norm (bool): whether or not apply spectral norm on 
+                critic network.
+            num_critic_inner_iter (int): number of innner optimization iterations
+                for critic update.
+            num_critic_outer_iter (int): number of outer optimization iterations
+                for critic update.
             optimizer (torch.optim.Optimizer): (optional) optimizer for training
+            critic_optimizer (torch.optim.Optimizer): (optional) optimizer for 
+                training the critic when using ``minmax_wgf``.
             name (str): name of this generator
         """
         super().__init__(train_state_spec=(), optimizer=optimizer, name=name)
+        self._output_dim = output_dim
         self._noise_dim = noise_dim
         self._entropy_regularization = entropy_regularization
         self._par_vi = par_vi
@@ -145,6 +252,20 @@ class Generator(Algorithm):
                 self._grad_func = self._svgd_grad2
             elif par_vi == 'svgd3':
                 self._grad_func = self._svgd_grad3
+            elif par_vi == 'minmax_wgf':
+                self._grad_func = self._minmax_wgf_grad
+                self._num_critic_iter = num_critic_iter
+                self._critic_spectral_norm = critic_spectral_norm
+                # self._num_critic_outer_iter = num_critic_outer_iter
+                self._critic_l2_weight = critic_l2_weight
+                # self._critic = CriticAlgorithm(TensorSpec(shape=(output_dim, )),
+                #                                # output_dim=output_dim,
+                #                                spectral_norm=critic_spectral_norm,
+                #                                optimizer=critic_optimizer)
+                # self._potential = CriticAlgorithm(TensorSpec(shape=(output_dim, )),
+                #                                # output_dim=output_dim,
+                #                                spectral_norm=critic_spectral_norm,
+                #                                optimizer=potential_optimizer)
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -269,6 +390,7 @@ class Generator(Algorithm):
             outputs, gen_inputs = self._predict(inputs, batch_size=batch_size)
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
+
         loss, loss_propagated = self._grad_func(inputs, outputs, loss_func,
                                                 entropy_regularization)
         mi_loss = ()
@@ -368,7 +490,7 @@ class Generator(Algorithm):
         kappa_inv = torch.inverse(kappa + alpha * torch.eye(N))  # [N, N]
         kappa_grad = torch.einsum('ij,ijk->jk', kappa, -2 * diff / h)  # [N, D]
 
-        return kappa_inv @ kappa_grad
+        return -kappa_inv @ kappa_grad
 
     def _svgd_grad(self, inputs, outputs, loss_func, entropy_regularization):
         """
@@ -456,7 +578,97 @@ class Generator(Algorithm):
         loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
 
         logq_grad = self._score_func(outputs)
-        grad = loss_grad - entropy_regularization * logq_grad
+        grad = loss_grad + entropy_regularization * logq_grad
+        loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
+
+        return loss, loss_propagated
+
+    def _critic_jac_diag_over_preds(self, inputs):
+        assert inputs.shape[-1] == self._output_dim, (
+            "inputs dim does not match the critic input_dim")
+        critic_step = self._critic.predict_step(inputs, compute_jac=True)
+        preds, jac_diag = critic_step.output
+        outputs = jac_diag / (preds + 1e-6)
+        # outputs = jac_diag / preds
+        return outputs
+
+    def _critic_train_step(self, inputs, vec):
+        assert (inputs.shape[-1] == self._output_dim), (  # and (
+            # vec.shape[-1] == self._output_dim), (
+            "inputs dim does not match the critic input_dim")
+        # vec_preds = self._critic_jac_diag_over_preds(inputs)
+        # loss = F.mse_loss(vec_preds, vec, reduction='sum')
+        critic_step = self._critic.predict_step(
+            inputs, compute_jac=True, training=True)
+        preds, jac = critic_step.output
+        # vec_preds = preds * vec
+        # loss = (vec_preds - jac_diag) * (vec_preds - jac_diag)
+        # norm = (preds * preds).sum(-1) # + 1e-6
+        # loss = loss.sum(-1) - norm * 10.
+        # idx1 = torch.where(torch.abs(preds) < 1e-5)
+        # idx2 = torch.where(torch.abs(preds) > 1e-5)
+        # loss1 = jac[idx1] * jac[idx1]
+        # loss2 = (vec[idx2] - jac[idx2]/preds[idx2]) * (vec[idx2] - jac[idx2]/preds[idx2])
+        # loss = loss1.sum() + loss2.sum()
+        loss = (vec * preds - jac) * (vec * preds - jac)
+        norm = preds * preds
+        loss = loss - norm * 20
+
+        return -loss
+
+    def _minmax_wgf_grad(self, inputs, outputs, loss_func,
+                         entropy_regularization):
+        """Compute particle gradient via minmax WGF. """
+        assert inputs is None, '"gfsf" does not support conditional generator'
+        loss = loss_func(outputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
+
+        # solve for optimal logq gradient vector
+        # batch_size = 64
+        # for outer_iter in range(self._num_critic_outer_iter):
+        # vec = torch.rand(outputs.shape)
+        num_particles = outputs.shape[0]
+        outputs2, _ = self._predict(inputs, batch_size=num_particles)
+        # self._critic.reset_net_parameters()
+        self._critic = CriticAlgorithm(
+            TensorSpec(shape=(self._output_dim, )),
+            spectral_norm=self._critic_spectral_norm,
+            optimizer=alf.optimizers.AdamTF(lr=1e-4))
+        # vec = torch.rand(outputs.shape)
+        perm = torch.randperm(self._output_dim)
+        idx = perm[0]
+        for outer_iter in range(4):
+            inputs = outputs2.detach().clone()
+            inputs.requires_grad = True
+            # vec = self._critic_jac_diag_over_preds(inputs).detach()
+            critic_step = self._critic.predict_step(inputs, compute_jac=True)
+            preds, jac = critic_step.output
+            vec = jac[:, [idx]] / (preds + 1e-6)
+            for inner_iter in range(5):
+                # for inner_iter in range(self._num_critic_iter):
+
+                # perm = torch.randperm(outputs.shape[0])
+                # idx = perm[:batch_size]
+                # inputs = outputs[idx].detach().clone()
+                # ivec = vec[idx]
+                critic_inputs = outputs2.detach().clone()
+                critic_inputs.requires_grad = True
+                critic_loss = self._critic_train_step(critic_inputs,
+                                                      vec.detach())
+                self._critic.update_with_gradient(LossInfo(loss=critic_loss))
+
+        neg_logq_grad = torch.zeros(outputs.shape)
+        critic_step = self._critic.predict_step(outputs, compute_jac=True)
+        preds, jac = critic_step.output
+        vec = jac[:, [idx]] / (preds + 1e-6)
+        neg_logq_grad[:, [idx]] = vec
+        # neg_logq_grad = self._critic_jac_diag_over_preds(outputs)
+        grad = loss_grad - entropy_regularization * neg_logq_grad
+        # print("mean logq_grad norm: {}".format(logq_grad.mean(0).norm()))
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
         return loss, loss_propagated

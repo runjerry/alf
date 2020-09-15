@@ -500,6 +500,11 @@ class Conv2D(nn.Module):
         else:
             kernel_initializer(self._conv2d.weight.data)
 
+        self._kernel_initializer = kernel_initializer
+        self._kernel_init_gain = kernel_init_gain
+        self._bias_init_value = bias_init_value
+        self._use_bias = use_bias
+        self._use_bn = use_bn
         if use_bias:
             nn.init.constant_(self._conv2d.bias.data, bias_init_value)
         if use_bn:
@@ -512,6 +517,21 @@ class Conv2D(nn.Module):
         if self._bn is not None:
             y = self._bn(y)
         return self._activation(y)
+
+    def reset_parameters(self):
+        if self._kernel_initializer is None:
+            variance_scaling_init(
+                self._conv2d.weight.data,
+                gain=self._kernel_init_gain,
+                nonlinearity=self._activation)
+        else:
+            self._kernel_initializer(self._conv2d.weight.data)
+
+        if self._use_bias:
+            nn.init.constant_(self._conv2d.bias.data, self._bias_init_value)
+
+        if self._use_bn:
+            self._bn.reset_parameters()
 
     @property
     def weight(self):
