@@ -102,11 +102,11 @@ class ParamConvNet(Network):
 
     def set_parameters(self, theta):
         """Distribute parameters to corresponding layers. """
-        if theta.ndim == 1:
-            theta = theta.unsqueeze(0)
-        assert (theta.ndim == 2 and theta.shape[1] == self.param_length), (
-            "Input theta has wrong shape %s. Expecting shape (, %d)" %
-            self.param_length)
+        # if theta.ndim == 1:
+        #     theta = theta.unsqueeze(0)
+        # assert (theta.ndim == 2 and theta.shape[1] == self.param_length), (
+        #     "Input theta has wrong shape %s. Expecting shape (, %d)" %
+        #     self.param_length)
         pos = 0
         for conv_l in self._conv_layers:
             weight_length = conv_l.weight_length
@@ -139,6 +139,7 @@ class ParamNetwork(Network):
                  input_tensor_spec,
                  conv_layer_params=None,
                  fc_layer_params=None,
+                 fc_layer_ctor=ParamFC,
                  activation=torch.relu_,
                  last_layer_param=None,
                  last_activation=None,
@@ -159,6 +160,7 @@ class ParamNetwork(Network):
             fc_layer_params (tuple[tuple]): a tuple of tuples where each tuple
                 takes a format ``(FC layer sizes. use_bias)``, where 
                 ``use_bias`` is optional.
+            fc_layer_ctor (callable): constructor of fc layer, default ParamFC.
             activation (torch.nn.functional): activation for all the layers
             last_layer_param (tuple): an optional tuple of the format
                 ``(size, use_bias)``, where ``use_bias`` is optional,
@@ -206,14 +208,14 @@ class ParamNetwork(Network):
             size = params[0]
             if len(params) > 1:
                 self._fc_layers.append(
-                    ParamFC(
+                    fc_layer_ctor(
                         input_size,
                         size,
                         activation=activation,
                         use_bias=params[1]))
             else:
                 self._fc_layers.append(
-                    ParamFC(input_size, size, activation=activation))
+                    fc_layer_ctor(input_size, size, activation=activation))
             input_size = size
 
         if last_layer_param is not None or last_activation is not None:
@@ -223,14 +225,14 @@ class ParamNetwork(Network):
             last_layer_size = last_layer_param[0]
             if len(last_layer_param) > 1:
                 self._fc_layers.append(
-                    ParamFC(
+                    fc_layer_ctor(
                         input_size,
                         last_layer_size,
                         activation=last_activation,
                         use_bias=last_layer_param[1]))
             else:
                 self._fc_layers.append(
-                    ParamFC(
+                    fc_layer_ctor(
                         input_size,
                         last_layer_size,
                         activation=last_activation))

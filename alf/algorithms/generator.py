@@ -87,6 +87,7 @@ class Generator(Algorithm):
                  noise_dim=32,
                  input_tensor_spec=None,
                  hidden_layers=(256, ),
+                 mlp_hidden_layers=((64, False), ),
                  net: Network = None,
                  net_moving_average_rate=None,
                  entropy_regularization=0.,
@@ -150,7 +151,7 @@ class Generator(Algorithm):
                 self._grad_func = self._svgd_grad3
             elif par_vi == 'ntk':
                 self._grad_func = self._svgd_grad_ntk
-                self._mlp_hidden_size = max(2, min(512, output_dim))
+                self._mlp_hidden_layers = mlp_hidden_layers
                 # spec = TensorSpec((self._output_dim, ))
                 # self._mlp = SimpleMLP(spec, hidden_layer_size=self._mlp_hidden_size)
             else:
@@ -455,21 +456,20 @@ class Generator(Algorithm):
     def _svgd_grad_ntk(self, inputs, outputs, loss_func,
                        entropy_regularization):
         """
-        Compute particle gradients via SVGD, using closed-form ntk of SimpleMLP
-        as kernel, and empirical expectation evaluated by splitting half of the
-        sampled batch.
+        Compute particle gradients via SVGD, using ntk of ReluMLP as kernel, 
+        and empirical expectation evaluated by splitting half of the sampled 
+        batch.
         """
         assert inputs is None, '"svgd2" does not support conditional generator'
-        num_particles = outputs.shape[0] // 2
-        outputs_i, outputs_j = torch.split(outputs, num_particles, dim=0)
+
         spec = TensorSpec((self._output_dim, ))
-        mlp = SimpleMLP(spec, hidden_layer_size=self._mlp_hidden_size)
+        mlp = ReluMLP(spec, hidden_layers=self._mlp_hidden_layers)
         # initializer=orthogonal_)
-        mlp(outputs)
-        ntk_logp, ntk_grad, loss = mlp.ntk_svgd(outputs, mlp.hidden_neurons,
-                                                loss_func)
-        grad = ntk_logp - entropy_regularization * ntk_grad
-        loss_propagated = torch.sum(grad.detach() * outputs_i, dim=-1)
+
+        ntk_grad, outputs_i = mlp.ntk_svgd(outputs, loss_func,
+                                           entropy_regularization)
+        # grad = ntk_logp - entropy_regularization * ntk_grad
+        loss_propagated = torch.sum(ntk_grad.detach() * outputs_i, dim=-1)
 
         return loss, loss_propagated
 

@@ -18,7 +18,6 @@ import gin
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Callable
 
 import alf
 from alf.algorithms.algorithm import Algorithm
