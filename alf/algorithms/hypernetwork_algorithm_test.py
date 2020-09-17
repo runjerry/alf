@@ -58,7 +58,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
     # @parameterized.parameters(('gfsf'), ('svgd2'), ('svgd3'), ('ntk'))
     def test_bayesian_linear_regression(self,
                                         par_vi='ntk',
-                                        num_particles=256,
+                                        num_particles=512,
                                         train_batch_size=10):
         """
         The hypernetwork is trained to generate the parameter vector for a linear

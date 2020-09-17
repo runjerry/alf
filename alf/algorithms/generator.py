@@ -23,7 +23,7 @@ from alf.algorithms.mi_estimator import MIEstimator
 from alf.data_structures import AlgStep, LossInfo, namedtuple
 import alf.nest as nest
 from alf.networks import Network, EncodingNetwork
-from alf.networks.simple_mlp import SimpleMLP
+from alf.networks.relu_mlp import ReluMLP
 from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops
 from alf.utils.averager import AdaptiveAverager
@@ -87,7 +87,7 @@ class Generator(Algorithm):
                  noise_dim=32,
                  input_tensor_spec=None,
                  hidden_layers=(256, ),
-                 mlp_hidden_layers=((64, False), ),
+                 mlp_hidden_layers=((4, False), (4, False), (4, False)),
                  net: Network = None,
                  net_moving_average_rate=None,
                  entropy_regularization=0.,
@@ -152,8 +152,8 @@ class Generator(Algorithm):
             elif par_vi == 'ntk':
                 self._grad_func = self._svgd_grad_ntk
                 self._mlp_hidden_layers = mlp_hidden_layers
-                # spec = TensorSpec((self._output_dim, ))
-                # self._mlp = SimpleMLP(spec, hidden_layer_size=self._mlp_hidden_size)
+                spec = TensorSpec((self._output_dim, ))
+                self._mlp = ReluMLP(spec, hidden_layers=mlp_hidden_layers)
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -377,7 +377,7 @@ class Generator(Algorithm):
         kappa_inv = torch.inverse(kappa + alpha * torch.eye(N))  # [N, N]
         kappa_grad = torch.einsum('ij,ijk->jk', kappa, -2 * diff / h)  # [N, D]
 
-        return kappa_inv @ kappa_grad
+        return -kappa_inv @ kappa_grad
 
     def _svgd_grad(self, inputs, outputs, loss_func, entropy_regularization):
         """
@@ -462,13 +462,12 @@ class Generator(Algorithm):
         """
         assert inputs is None, '"svgd2" does not support conditional generator'
 
-        spec = TensorSpec((self._output_dim, ))
-        mlp = ReluMLP(spec, hidden_layers=self._mlp_hidden_layers)
+        # spec = TensorSpec((self._output_dim, ))
+        # mlp = ReluMLP(spec, hidden_layers=self._mlp_hidden_layers)
         # initializer=orthogonal_)
 
-        ntk_grad, outputs_i = mlp.ntk_svgd(outputs, loss_func,
-                                           entropy_regularization)
-        # grad = ntk_logp - entropy_regularization * ntk_grad
+        ntk_grad, outputs_i, loss = self._mlp.ntk_svgd(outputs, loss_func,
+                                                       entropy_regularization)
         loss_propagated = torch.sum(ntk_grad.detach() * outputs_i, dim=-1)
 
         return loss, loss_propagated
@@ -485,7 +484,7 @@ class Generator(Algorithm):
         loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
 
         logq_grad = self._score_func(outputs)
-        grad = loss_grad - entropy_regularization * logq_grad
+        grad = loss_grad + entropy_regularization * logq_grad
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
         return loss, loss_propagated
