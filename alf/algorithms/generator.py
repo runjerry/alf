@@ -87,7 +87,7 @@ class Generator(Algorithm):
                  noise_dim=32,
                  input_tensor_spec=None,
                  hidden_layers=(256, ),
-                 mlp_hidden_layers=((4, False), (4, False), (4, False)),
+                 mlp_hidden_layers=((64, False), (64, False)),
                  net: Network = None,
                  net_moving_average_rate=None,
                  entropy_regularization=0.,
@@ -152,8 +152,8 @@ class Generator(Algorithm):
             elif par_vi == 'ntk':
                 self._grad_func = self._svgd_grad_ntk
                 self._mlp_hidden_layers = mlp_hidden_layers
-                spec = TensorSpec((self._output_dim, ))
-                self._mlp = ReluMLP(spec, hidden_layers=mlp_hidden_layers)
+                # spec = TensorSpec((self._output_dim, ))
+                # self._mlp = ReluMLP(spec, hidden_layers=mlp_hidden_layers)
             else:
                 raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
@@ -462,12 +462,12 @@ class Generator(Algorithm):
         """
         assert inputs is None, '"svgd2" does not support conditional generator'
 
-        # spec = TensorSpec((self._output_dim, ))
-        # mlp = ReluMLP(spec, hidden_layers=self._mlp_hidden_layers)
+        spec = TensorSpec((self._output_dim, ))
+        mlp = ReluMLP(spec, hidden_layers=self._mlp_hidden_layers)
         # initializer=orthogonal_)
 
-        ntk_grad, outputs_i, loss = self._mlp.ntk_svgd(outputs, loss_func,
-                                                       entropy_regularization)
+        ntk_grad, outputs_i, loss = mlp.ntk_svgd(outputs, loss_func,
+                                                 entropy_regularization)
         loss_propagated = torch.sum(ntk_grad.detach() * outputs_i, dim=-1)
 
         return loss, loss_propagated

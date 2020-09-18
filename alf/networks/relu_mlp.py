@@ -126,6 +126,7 @@ class ReluMLP(ParamNetwork):
     def set_parameters(self, params=None):
         if params is None:
             self._kernel_initializer(self._params)
+            self._params = self._params / 8
         else:
             assert (params.ndim == 1 and len(params) == self.param_length)
             params.requires_grad = True
@@ -209,36 +210,3 @@ class ReluMLP(ParamNetwork):
                        combined_vec_j)[1]  # [bi, n]
 
         return ntk_grad, inputs_i, loss
-
-    # def compute_ntk(self, inputs1, inputs2, hidden_neurons1, hidden_neurons2):
-    #     """Compute ntk in closed-form. """
-
-    #     inputs1 = inputs1.squeeze()
-    #     inputs2 = inputs2.squeeze()
-    #     hidden_neurons1 = hidden_neurons1.squeeze()
-    #     hidden_neurons2 = hidden_neurons2.squeeze()
-
-    #     assert inputs1.ndim == 1 and len(inputs1) == self._input_size, \
-    #         ("inputs1 should has shape {}!".format(self._input_size))
-
-    #     assert inputs2.ndim == 1 and len(inputs2) == self._input_size, \
-    #         ("inputs2 should has shape {}!".format(self._input_size))
-
-    #     assert (hidden_neurons1.ndim == 1) and (
-    #         len(hidden_neurons1) == self._hidden_layers[0]), \
-    #         ("hidden_neurons1 should has shape {}!".format(self._hidden_layers[0]))
-
-    #     assert (hidden_neurons2.ndim == 1) and (
-    #         len(hidden_neurons2) == self._hidden_layers[0]), \
-    #         ("hidden_neurons2 should has shape {}!".format(self._hidden_layers[0]))
-
-    #     ntk = torch.dot(hidden_neurons1, hidden_neurons2) * torch.eye(
-    #         self._output_size)
-    #     mask1 = (hidden_neurons1 > 0).float()
-    #     mask2 = (hidden_neurons2 > 0).float()
-    #     D1 = self._last_fc.weight.data * mask1
-    #     D2 = self._last_fc.weight.data * mask2
-    #     inputs_norm2 = torch.dot(inputs1, inputs2)
-    #     ntk = ntk + inputs_norm2 * torch.matmul(D1, D2.t())
-
-    #     return ntk
