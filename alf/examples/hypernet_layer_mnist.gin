@@ -6,10 +6,10 @@ create_dataset.train_batch_size=50
 create_dataset.test_batch_size=100
 
 # Lenet for MNIST
-CONV_LAYER_PARAMS = ((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
-#CONV_LAYER_PARAMS = ((6, 5, 1, 2, 4), (16, 5, 1, 0))
-FC_LAYER_PARAMS = ((84, True), )
-#FC_LAYER_PARAMS = ((144, True), )
+#CONV_LAYER_PARAMS = ((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
+CONV_LAYER_PARAMS = ((6, 5, 1, 2, 4), (16, 5, 1, 0))
+#FC_LAYER_PARAMS = ((84, True), )
+FC_LAYER_PARAMS = ((144, True), )
 HIDDEN_LAYERS = (512, 1024)
 
 hypernet/Adam.lr=1e-4

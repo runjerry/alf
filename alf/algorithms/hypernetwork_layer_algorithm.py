@@ -129,7 +129,6 @@ class HyperNetwork(Algorithm):
                  particles=10,
                  entropy_regularization=1.,
                  parameterization='layer',
-                 use_function_values=False,
                  loss_type="classification",
                  voting="soft",
                  par_vi="svgd",
@@ -177,8 +176,6 @@ class HyperNetwork(Algorithm):
                 A parameterization of ``network`` uses a single generator to
                 generate all the weights at once. A parameterization of ``layer``
                 uses one generator for each layer of output parameters.
-            use_function_values (bool): whether or not to use parameters as the
-                particles of interest, or their function values
 
             Args for training and testing
             ====================================================================
@@ -236,6 +233,7 @@ class HyperNetwork(Algorithm):
                 name="Generator")
 
         if par_vi == 'minmax':
+            print (gen_output_dim)
             critic = ForwardNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
@@ -274,7 +272,6 @@ class HyperNetwork(Algorithm):
         self._critic = critic
         self._particles = particles
         self._entropy_regularization = entropy_regularization
-        self._use_function_values = use_function_values
         self._train_loader = None
         self._test_loader = None
         self._use_fc_bn = use_fc_bn
@@ -387,16 +384,11 @@ class HyperNetwork(Algorithm):
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
         
-        if self._use_function_values:
-            self._param_net.set_parameters(params)
-            outputs, _ = self._param_net(inputs[0])
-            loss_func = functools.partial(neglogprob2, inputs, outputs,
-                self._loss_type)
-        else:
-            outputs = params
-            loss_func = functools.partial(neglogprob, inputs, self._param_net,
-                self._loss_type)
-        
+
+        outputs = params
+        loss_func = functools.partial(neglogprob, inputs, self._param_net,
+            self._loss_type)
+
         if self._generator._par_vi == 'minmax':
             for i in range(self._d_iters):
                 self._critic.predict_with_update(outputs, loss_func)
@@ -421,8 +413,6 @@ class HyperNetwork(Algorithm):
         if self._use_fc_bn:
             self._generator.eval()
         params = self.sample_parameters(particles=particles)
-        if self._generator._critic is not None:
-            params = params[0]
         self._param_net.set_parameters(params)
         if self._use_fc_bn:
             self._generator.train()

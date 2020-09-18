@@ -445,15 +445,9 @@ class Generator(Algorithm):
         else:
             neglogp = loss
         loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
-        
-        #if outputs.dim() == 3:  # [B, N, D]
-        #    outputs = outputs.transpose(0, 1)
-        #    outputs = outputs.reshape(outputs.shape[0], -1)
-        #    loss_grad = loss_grad.transpose(0, 1)
-        #    loss_grad = loss_grad.reshape(loss_grad.shape[0], -1)
         logq_grad = self._score_func(outputs)
+        
         grad = loss_grad - entropy_regularization * logq_grad
-        # print (loss_grad.shape, logq_grad.shape, grad.shape)
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
         return loss, loss_propagated 

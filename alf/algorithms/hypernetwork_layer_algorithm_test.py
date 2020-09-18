@@ -203,8 +203,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             print("\tSampled cov err {}".format(scov_err))
             print("learned_cov norm: {}".format(learned_cov.norm()))
             
-            self.plot_predictions(inputs, targets, computed_preds, i)
-            self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
+            #self.plot_predictions(inputs, targets, computed_preds, i)
+            #self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
         
         train_iter = 6000
         for i in range(train_iter):
@@ -227,9 +227,9 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLess(cov_err, 0.5)
 
     @parameterized.parameters(
-        #('gfsf', 32, 100),
-        #('svgd2', 32, 100),
-        #('svgd3', 32, 100),
+        ('gfsf', 32, 100),
+        ('svgd2', 32, 100),
+        ('svgd3', 32, 100),
         ('minmax', 32, 100))
     def test_hypernetwork_classification(self,
                                          par_vi=None,
