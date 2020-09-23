@@ -451,10 +451,10 @@ class ForwardNetwork(Algorithm):
         else:
             neglogp = loss
         loss_grad = torch.autograd.grad(neglogp.sum(), net_outputs)[0]  # [N, D]
-        log_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
+        neglog_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
         tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
         lamb = 10
-        stein_pq = log_p_f + tr_critic.unsqueeze(1) # [n x 1]
+        stein_pq = -neglog_p_f + tr_critic.unsqueeze(1) # [n x 1]
         l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
         adv_grad =  stein_pq.mean() - l2_penalty
         loss_propagated = -adv_grad
