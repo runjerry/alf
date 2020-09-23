@@ -421,7 +421,26 @@ class ForwardNetwork(Algorithm):
         else:
             tr_jvp = torch.einsum('bi,bj->b', jvp, eps)
         return tr_jvp
-
+    """
+    def _minmax_critic_grad(self, net_outputs, critic_outputs, loss_func):
+        
+        loss_inputs = net_outputs
+        loss = loss_func(loss_inputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        loss_grad = torch.autograd.grad(neglogp.sum(), net_outputs)[0]  # [N, D]
+        log_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
+        tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
+        lamb = 10
+        stein_pq = log_p_f - tr_critic.unsqueeze(1) # [n x 1]
+        l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
+        adv_grad =  -1 * stein_pq.mean() + l2_penalty
+        loss_propagated = adv_grad
+        
+        return loss, loss_propagated
+    """
     def _minmax_critic_grad(self, net_outputs, critic_outputs, loss_func):
         """update direction \phi^*(x) for minmax amortized svgd"""
         
@@ -434,11 +453,11 @@ class ForwardNetwork(Algorithm):
         loss_grad = torch.autograd.grad(neglogp.sum(), net_outputs)[0]  # [N, D]
         log_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
         tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
-        lamb = 10.
-        stein_pq = log_p_f - tr_critic.unsqueeze(1) # [n x 1]
+        lamb = 10
+        stein_pq = log_p_f + tr_critic.unsqueeze(1) # [n x 1]
         l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
-        adv_grad = -1 * stein_pq.mean() + l2_penalty
-        loss_propagated = adv_grad
+        adv_grad =  stein_pq.mean() - l2_penalty
+        loss_propagated = -adv_grad
         
         return loss, loss_propagated
     

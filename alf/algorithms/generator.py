@@ -462,7 +462,7 @@ class Generator(Algorithm):
             neglogp = loss.loss
         else:
             neglogp = loss
-        loss_propagated = torch.sum(critic_outputs.detach() * net_outputs, dim=1)
+        loss_propagated = torch.sum(-critic_outputs.detach() * net_outputs, dim=1)
         return loss, loss_propagated
 
     def after_update(self, training_info):
