@@ -14,6 +14,7 @@
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 import alf
@@ -24,6 +25,21 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
+
+class BNN(nn.Module):
+    def __init__(self, n_hidden):
+        super(BNN, self).__init__()
+        self.n_hiden = n_hidden
+        self.layers = []
+        self.linear1 = nn.Linear(n_hidden[0], n_hidden[1], bias=True)
+        self.linear2 = nn.Linear(n_hidden[1], n_hidden[2], bias=True)
+        self.linear3 = nn.Linear(n_hidden[2], n_hidden[3], bias=True)
+
+    def forward(self, x):
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        return self.linear3(x)
+        
 
 class HMCTest(alf.test.TestCase):
 
@@ -88,7 +104,7 @@ class HMCTest(alf.test.TestCase):
         def _test():
             samples = algorithm.sample(params, num_samples)
             return samples
-        samples = _test()
+        #samples = _test()
         samples = torch.cat(samples).reshape(len(samples),-1)
         self.plot_hmc_1d(samples.cpu().numpy())
 
@@ -168,7 +184,7 @@ class HMCTest(alf.test.TestCase):
         def _test():
             samples = algorithm.sample(params, num_samples)
             return samples
-        samples = _test()
+        #samples = _test()
         samples = torch.cat(samples).reshape(len(samples),-1)
 
         lside_samples = torch.stack([x for x in samples if x[0] < 0])
@@ -247,7 +263,7 @@ class HMCTest(alf.test.TestCase):
 
         def _test():
             return algorithm.sample(params, num_samples)
-        samples = _test()
+        #samples = _test()
         samples = torch.cat(samples).reshape(len(samples),-1)
         self.plot_hmc_funnel(samples.cpu().numpy())
 
@@ -261,6 +277,139 @@ class HMCTest(alf.test.TestCase):
             self.assertTensorClose(sample_std, pv_std, .8)
         
         
+    def get_data(self, n_train, n_test):
+        x_train = torch.linspace(-np.pi, np.pi, n_train).view(-1, 1)
+        y_train = torch.sin(x_train).view(-1, 1) + torch.randn_like(x_train)*0.1
+
+        x_test = torch.linspace(-5, 5, n_test).view(-1, 1)
+        y_test = torch.sin(x_test).view(-1, 1)
+        return (x_train, y_train), (x_test, y_test)
+    
+    def plot_bnn_regression(self, bnn_preds):
+        (x_train, y_train), (x_test, y_test) = self.get_data(6, 300)
+        x_test = x_test.cpu().numpy()
+        x_train = x_train.cpu().numpy()
+        bnn_preds = bnn_preds.cpu()
+        print (x_test.shape, bnn_preds.shape)
+        plt.plot(x_test, bnn_preds[:].numpy().squeeze().T,
+            'C0',alpha=0.01)
+        plt.plot(x_test, bnn_preds.mean(0).squeeze().T, 'C1',alpha=0.9)
+        plt.plot(x_test,
+            bnn_preds.mean(0).squeeze().T+bnn_preds.std(0).squeeze().T,
+            'C1',alpha=0.8,linewidth=3)
+        plt.plot(x_test,
+            bnn_preds.mean(0).squeeze().T-bnn_preds.std(0).squeeze().T,
+            'C1',alpha=0.8,linewidth=3)
+        plt.plot(x_train, y_train.cpu().numpy(),'.C3',markersize=30,
+            label='x train',alpha=0.6)
+        plt.legend(fontsize=20)
+        plt.ylim([-5, 5])
+        plt.savefig('hmc_bnn.png')
+
+    def test_BayesianNNRegression(self):
+        n_train = 6
+        n_test = 300
+        train_samples, test_samples = self.get_data(n_train, n_test)
+        net = BNN([1, 10, 10, 1])
+        params_init = torch.cat([p.flatten() for p in net.parameters()]).clone()
+        tau_list = []
+        tau = 0.1
+        for p in net.parameters():
+            tau_list.append(tau)
+        tau_list = torch.tensor(tau_list)
+        step_size = 0.012
+        num_samples = 500
+        steps_per_sample = 10
+        tau_out = 100.
+        print ('HMC: Fitting BNN to regression data')
+        algorithm = HMC(
+            params=params_init,
+            num_samples=num_samples,
+            steps_per_sample=steps_per_sample,
+            step_size=step_size,
+            model=net,
+            model_loss='regression',
+            tau_list=tau_list,
+            tau_out=tau_out)
+
+        def _train():
+            train_data, train_labels = train_samples
+            params_hmc = algorithm.sample_model(train_data, train_labels)
+            return params_hmc
+
+        def _test(hmc_params):
+            test_data, test_labels = test_samples
+            preds, log_probs = algorithm.predict_model(test_data, test_labels,
+                samples=hmc_params)
+            print ('Expected test log probability: {}'.format(torch.stack(
+                log_probs).mean()))
+            print ('Expected MSE: {}'.format(
+                ((preds.mean(0) - test_labels)**2).mean()))
+            return preds
+
+        #hmc_params = _train()
+        #bnn_preds = _test(hmc_params)
+        self.plot_bnn_regression(bnn_preds)
+    
+    def generate_class_data(self,
+        n_samples=100,
+        means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
+        data = torch.zeros(n_samples, 2)
+        labels = torch.zeros(n_samples)
+        size = n_samples//len(means)
+        for i, (x, y) in enumerate(means):
+            dist = torch.distributions.Normal(torch.tensor([x, y]), .1)
+            samples = dist.sample([size])
+            data[size*i:size*(i+1)] = samples
+            labels[size*i:size*(i+1)] = torch.ones(len(samples)) * i
         
+        return data, labels.long()
+    
+
+    def test_BayesianNNClassification(self):
+        n_train = 400
+        n_test = 300
+        inputs, targets = self.generate_class_data(n_train)
+        net = BNN([2, 32, 32, 4])
+        params_init = torch.cat([p.flatten() for p in net.parameters()]).clone()
+        tau_list = []
+        tau = 0.1
+        for p in net.parameters():
+            tau_list.append(tau)
+        tau_list = torch.tensor(tau_list)
+        step_size = 0.1
+        num_samples = 500
+        steps_per_sample = 10
+        tau_out = 100.
+        print ('HMC: Fitting BNN to regression data')
+        algorithm = HMC(
+            params=params_init,
+            num_samples=num_samples,
+            steps_per_sample=steps_per_sample,
+            step_size=step_size,
+            model=net,
+            model_loss='classification',
+            tau_list=tau_list,
+            tau_out=tau_out)
+
+        def _train():
+            params_hmc = algorithm.sample_model(inputs, targets)
+            return params_hmc
+
+        def _test(hmc_params):
+            test_data, test_labels = self.generate_class_data(n_test)
+            preds, log_probs = algorithm.predict_model(test_data, test_labels,
+                samples=hmc_params)
+            print ('Expected test log probability: {}'.format(torch.stack(
+                log_probs).mean()))
+            print ('Expected XE loss: {}'.format(
+                F.cross_entropy(preds.mean(0), test_labels).mean()))
+            return preds
+
+        hmc_params = _train()
+        bnn_preds = _test(hmc_params)
+        self.plot_bnn_classification(bnn_preds)
+
+   
 if __name__ == "__main__":
     alf.test.main()

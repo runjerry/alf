@@ -202,7 +202,7 @@ class ForwardNetwork(Algorithm):
         if loss_type == "classification":
             self._vote = self._classification_vote
         elif loss_type == "regression":
-            self._vote = self.regression_vote
+            self._vote = self._regression_vote
         else:
             raise ValueError("Unsupported loss_type: {}".format(loss_type))
         self._loss_type = loss_type

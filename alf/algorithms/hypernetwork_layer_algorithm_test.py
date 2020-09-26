@@ -100,7 +100,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
                                         particles=512,
-                                        train_batch_size=10):
+                                        train_batch_size=20):
         """
         The hypernetwork is trained to generate the parameter vector for a linear
         regressor. The target linear regressor is :math:`y = X\beta + e`, where 
@@ -137,7 +137,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             loss_type='regression',
             par_vi=par_vi,
             parameterization='layer',
-            optimizer=alf.optimizers.Adam(lr=1e-3))
+            optimizer=alf.optimizers.Adam(lr=1e-4))
         print("ground truth mean: {}".format(true_mean))
         print("ground truth cov norm: {}".format(true_cov.norm()))
         print("ground truth cov: {}".format(true_cov))
@@ -206,7 +206,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             #self.plot_predictions(inputs, targets, computed_preds, i)
             #self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
         
-        train_iter = 6000
+        train_iter = 30000
         for i in range(train_iter):
             _train(i)
             if i % 1000 == 0:

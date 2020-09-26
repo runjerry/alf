@@ -237,11 +237,11 @@ class HyperNetwork(Algorithm):
             critic = ForwardNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
-                fc_layer_params=(100, 100),
+                fc_layer_params=(16, 16),
                 activation=torch.nn.functional.relu,
                 last_layer_param=gen_output_dim,
                 last_activation=math_ops.identity,
-                optimizer=alf.optimizers.Adam(lr=1e-3),
+                optimizer=alf.optimizers.Adam(lr=1e-4),
                 name="Critic")
             self._d_iters = 5
         else:

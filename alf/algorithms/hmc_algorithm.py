@@ -12,8 +12,16 @@ from alf.data_structures import AlgStep, LossInfo, namedtuple
 import alf.nest as nest
 from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops
+import types
+from collections import OrderedDict
+
 
 HMCLossInfo = namedtuple("HMCLossInfo", ["sampler"])
+
+
+class Scope(object):
+    def __init__(self):
+        self._modules = OrderedDict()
 
 
 @gin.configurable
@@ -36,17 +44,21 @@ class HMC(Algorithm):
     
     """
     def __init__(self,
-             log_prob_func,
-             params,
+             log_prob_func=None,
+             params=None,
              num_samples=10,
              steps_per_sample=10,
              step_size=0.1,
              burn_in_steps=0,
              inv_mass=None,
+             model=None,
+             model_loss='regression',
+             tau_list=None,
+             tau_out=.1,
              name="HMC"):
         r"""Instantiate an HMC Sampler.
 
-        Args:
+        Args for training an HMC sampler
             log_prob_func (Callable):
             params (torch.tensor):
             num_samples (int):
@@ -54,6 +66,11 @@ class HMC(Algorithm):
             step_size (int):
             burn_in_steps (int):
             inv_mass (float):
+        ===================================================================
+        Args for training a Bayesian neural network with HMC
+            model (nn.module):
+            tau_list (list):
+            tau_out (float):
             name (str): name of this HMC sampler
         """
         super().__init__(train_state_spec=(), name=name)
@@ -64,7 +81,14 @@ class HMC(Algorithm):
         self._steps_per_sample = steps_per_sample
         self._burn_in_steps = burn_in_steps
         self._inv_mass = inv_mass
+        self._model = model
+        self._model_loss = model_loss
+        self._tau_list = tau_list
+        self._tau_out = tau_out
  
+    def set_log_prob_func(self, fn):
+        self._log_prob_func = fn
+
     def _collect_gradients(self, log_prob, params):
         if isinstance(log_prob, tuple):
             log_prob[0].backward()
@@ -93,7 +117,6 @@ class HMC(Algorithm):
                     torch.zeros_like(params),
                     mass)
         return dist.sample()
-
 
     def _leapfrog(self, momentum):
 
@@ -158,7 +181,7 @@ class HMC(Algorithm):
         return hamiltonian
 
 
-    def sample(self, params_init, num_samples=10):
+    def sample(self, params_init, num_samples=0):
 
         assert params_init.dim() == 1, "``params_init`` must be a 1d tensor."
         assert self._burn_in_steps <= num_samples, "``burn_in_steps`` must be less than "\
@@ -173,6 +196,8 @@ class HMC(Algorithm):
                 mass = 1/self._inv_mass
         
         self._current_params = params_init.clone().requires_grad_()
+        if num_samples <= 0:
+            num_samples = self._num_samples
         
         ret_params = [self._current_params.clone()]
         self._num_rejected = 0.
@@ -217,4 +242,147 @@ class HMC(Algorithm):
             1 - self._num_rejected/num_samples))
         samples = list(map(lambda t: t.detach(), ret_params))
         return samples
+
+    def _unflatten_to_model(self, params):
+        if params.dim() != 1:
+            raise ValueError('Expecting a 1d flattened_params')
+        params_list = []
+        i = 0
+        for val in list(self._model.parameters()):
+            length = val.nelement()
+            param = params[i:i+length].view_as(val)
+            params_list.append(param)
+            i += length
+        return params_list
+
+    def _define_model_log_prob(self, x, y, param_list, param_shapes,
+        predict=False):
+
+        fmodel = self._make_functional(self._model)
+        dist_list = []
+        for tau in self._tau_list:
+            dist_list.append(torch.distributions.Normal(
+                torch.zeros_like(self._tau_list[0]), tau**-0.5))
+
+        def log_prob_func(params):
+            params_unflattened = self._unflatten_to_model(params)
+            i_prev = 0
+            l_prior = torch.zeros_like(params[0], requires_grad=True)
+            for weights, index, shape, dist in zip(
+                self._model.parameters(), param_list, param_shapes, dist_list):
+                w = params[i_prev:index+i_prev]
+                l_prior = dist.log_prob(w).sum() + l_prior
+                i_prev += index
+
+            # Sample prior if no data
+            if x is None:
+                return l_prior
+
+            output = fmodel(x, params=params_unflattened)
+
+            if self._model_loss is 'binary_class':
+                crit = nn.BCEWithLogitsLoss(reduction='sum')
+                ll = - self._tau_out *(crit(output, y))
+            elif self._model_loss is 'classification':
+                crit = nn.CrossEntropyLoss(reduction='sum')
+                ll = - self._tau_out *(crit(output, y.long().view(-1)))
+            elif self._model_loss is 'regression':
+                ll = - 0.5 * self._tau_out * ((output - y) ** 2).sum(0)
+            
+            if predict:
+                return ll + l_prior, output
+            else:
+                return ll + l_prior
+        self.set_log_prob_func(log_prob_func)
+
+    def sample_model(self, x, y):       
+        param_shapes = []
+        param_list = []
+        build_tau = False
+        if self._tau_list is None:
+            self._tau_list = []
+            build_tau = True
+        for weights in self._model.parameters():
+            param_shapes.append(weights.shape)
+            param_list.append(weights.nelement())
+            if build_tau:
+                self._tau_list.append(1.)
+
+        self._define_model_log_prob(x, y, param_list, param_shapes)
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return self.sample(self._params_init)
+
+    def predict_model(self, x, y, samples):      
+        param_shapes = []
+        param_list = []
+        build_tau = False
+        if self._tau_list is None:
+            self._tau_list = []
+            build_tau = True
+        for weights in self._model.parameters():
+            param_shapes.append(weights.shape)
+            param_list.append(weights.nelement())
+            if build_tau:
+                self._tau_list.append(1.)
+
+        self._define_model_log_prob(x, y, param_list, param_shapes,
+            predict=True)
+
+        pred_log_prob_list = []
+        pred_list = []
+        for sample in samples:
+            logprob, pred = self._log_prob_func(sample)
+            pred_log_prob_list.append(logprob.detach()) 
+            pred_list.append(pred.detach())
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return torch.stack(pred_list), pred_log_prob_list
+
+    def _get_torch_functional(self, module, params_box, params_offset):
+        self_ = Scope()
+        num_params = len(module._parameters)
+        param_names = list(module._parameters.keys())
+        # Set dummy variable to bias_None to rename as flag if no bias
+        if 'bias' in param_names and module._parameters['bias'] is None:
+            param_names[-1] = 'bias_None' # Remove last name (hopefully bias) from list
+        forward = type(module).forward
+        _internal_attrs = {'_backend', '_parameters', '_buffers',
+            '_backward_hooks', '_forward_hooks', '_forward_pre_hooks',
+            '_modules'}
+
+        for name, attr in module.__dict__.items():
+            if name in _internal_attrs:
+                continue   #If internal attributes skip
+            setattr(self_, name, attr)
+
+        child_params_offset = params_offset + num_params
+        for name, child in module.named_children():
+            child_params_offset, fchild = self._get_torch_functional(
+                child, params_box, child_params_offset)
+            self_._modules[name] = fchild  # fchild is functional child
+            setattr(self_, name, fchild)
+        def fmodule(*args, **kwargs):
+            if 'bias_None' in param_names:
+                params_box[0].insert(params_offset + 1, None)
+            for name, param in zip(param_names,
+                params_box[0][params_offset:params_offset + num_params]):
+                if name == 'bias_None':
+                    setattr(self_, 'bias', None)
+                else:
+                    setattr(self_, name, param)
+            return forward(self_, *args) #, **kwargs)
+        return child_params_offset, fmodule
+
+    def _make_functional(self, module):
+        params_box = [None]
+        _, fmodule_func = self._get_torch_functional(module, params_box, 0)
+
+        def fmodule(*args, **kwargs):
+            params_box[0] = kwargs.pop('params')
+            return fmodule_func(*args, **kwargs)
+        return fmodule
 

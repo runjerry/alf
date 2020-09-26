@@ -92,7 +92,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertEqual(x.shape, y.shape)
         self.assertGreater(float(torch.min(x - y)), eps)
 
-    @parameterized.parameters(('minmax', 512, 100), ('minmax', 512),
+    @parameterized.parameters(('minmax', 32, 10), ('minmax', 512),
                               #('gfsf', 512), ('gfsf', 512, 100),
                               #('svgd2'), ('svgd2', 32, 100),
                               #('svgd3'), ('svgd3', 32, 100)
@@ -113,6 +113,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         
         """
         print ('Testing {} method with {} particles'.format(par_vi, particles))
+        print ('train batch size', train_batch_size)
         input_size = 3
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
