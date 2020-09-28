@@ -237,7 +237,8 @@ class HyperNetwork(Algorithm):
             critic = ForwardNetwork(
                 TensorSpec(shape=(gen_output_dim, )),
                 conv_layer_params=None,
-                fc_layer_params=(16, 16),
+                fc_layer_params=(32, 32),
+                use_fc_bn=True,
                 activation=torch.nn.functional.relu,
                 last_layer_param=gen_output_dim,
                 last_activation=math_ops.identity,

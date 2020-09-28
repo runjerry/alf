@@ -215,12 +215,13 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
     
     def generate_data(self,
         n_samples=100,
-        means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
+        #means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
+        means=[(2., 2.), (-2., 2.), (2., -2.), (-2., -2.)]):
         data = torch.zeros(n_samples, 2)
         labels = torch.zeros(n_samples)
         size = n_samples//len(means)
         for i, (x, y) in enumerate(means):
-            dist = torch.distributions.Normal(torch.tensor([x, y]), .1)
+            dist = torch.distributions.Normal(torch.tensor([x, y]), .3)
             samples = dist.sample([size])
             data[size*i:size*(i+1)] = samples
             labels[size*i:size*(i+1)] = torch.ones(len(samples)) * i
@@ -229,19 +230,19 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
     
     def plot_classification(self, i, algorithm, conf_style='mean', tag=''):
         #plt.style.use('classic')
-        x = torch.linspace(-3, 3, 300)
-        y = torch.linspace(-3, 3, 300)
+        x = torch.linspace(-10, 10, 100)
+        y = torch.linspace(-10, 10, 100)
         gridx, gridy = torch.meshgrid(x, y)
         grid = torch.stack((gridx.reshape(-1), gridy.reshape(-1)), -1)
 
-        #grid, _ = self.generate_data(n_samples=20)
-        #outputs, _ = algorithm._param_net(grid)  # [B, N, D]
         outputs = []
         for _ in range(100):
             output = algorithm.predict_step(grid, particles=100).output.cpu()
             outputs.append(output)
         outputs = torch.cat(outputs, dim=1)
-        mean_outputs = F.softmax(output, -1).mean(1).detach().cpu()  # [B, D]
+        outputs = F.softmax(outputs, -1).detach()  # [B, D]
+        mean_outputs = outputs.mean(1).cpu()  # [B, D]
+        std_outputs = outputs.std(1).cpu()
 
         if conf_style == 'mean':
             conf_outputs = mean_outputs.mean(-1)
@@ -250,33 +251,36 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         elif conf_style == 'min':
             conf_outputs = mean_outputs.min(-1)[0]
         elif conf_style == 'entropy':
+            print (mean_outputs.shape)
             conf_outputs = entropy(mean_outputs.T.numpy())
-        conf_std = mean_outputs.std(-1)
+        conf_mean = mean_outputs.mean(-1)
+        conf_std = std_outputs.max(-1)[0] * 1.94
         labels = mean_outputs.argmax(-1)
         data, _ = self.generate_data(n_samples=400) 
-        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs, cmap='jet')
+        print (conf_outputs.shape)
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs, cmap='rainbow')
         p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("{} confidance".format(conf_style))
         plt.savefig('minmax_plots/conf_map{}-{}_{}.png'.format(i, conf_style, tag))
         plt.close('all')
 
-        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std, cmap='jet')
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std, cmap='rainbow')
         p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("confidance (std)")
         plt.savefig('minmax_plots/conf_map{}-std_{}.png'.format(tag, i))
         plt.close('all')
         
-        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels, cmap='jet')
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels, cmap='rainbow')
         p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("predicted labels")
         plt.savefig('minmax_plots/conf_map{}-labels_{}.png'.format(tag, i))
         plt.close('all')
 
-    @parameterized.parameters(('svgd'), ('gfsf'))#, ('minmax'))
-    def test_classification_hypernetwork(self, par_vi='minmax', particles=256):
+    #@parameterized.parameters(('svgd'), ('gfsf'))#, ('minmax'))
+    def test_classification_hypernetwork(self, par_vi='minmax', particles=100):
         """
         Using a the log probability function defined above. We want to use this
         to train an HMC chain that evolves towards fitting the target mixture 
@@ -291,19 +295,19 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         input_size = 2
         output_dim = 4
         batch_size = 100
-        noise_dim = 32
+        noise_dim = 16
         input_spec = TensorSpec((input_size, ), torch.float32)
-        train_batch_size = 50
+        train_batch_size = 100
         
-        train_nsamples = 400
-        test_nsamples = 100
+        train_nsamples = 100
+        test_nsamples = 20
         inputs, targets = self.generate_data(train_nsamples)
         test_inputs, test_targets = self.generate_data(test_nsamples)
         
         algorithm = HyperNetwork(
             input_tensor_spec=input_spec,
-            fc_layer_params=((32, True), (32, True)),
-            last_layer_param=(output_dim, False),
+            fc_layer_params=((10, True), (10, True)),
+            last_layer_param=(output_dim, True),
             last_activation=math_ops.identity,
             noise_dim=noise_dim,
             hidden_layers=(32, 32),
@@ -349,7 +353,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
                 self.plot_classification(i, algorithm, 'entropy', par_vi)
             return sample_preds, targets_unrolled
 
-        train_iter = 5000
+        train_iter = 15000
         for i in range(train_iter):
             acc = _train()
             if i % 1000 == 0:

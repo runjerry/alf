@@ -164,7 +164,7 @@ class HMC(Algorithm):
     def _hamiltonian(self, params, momentum):
         log_prob = self._log_prob_func(params)
         if self._has_nan_or_inf(log_prob):
-            logging.info('Invalid log_prob: {}, params: {}'.format(log_prob, params))
+            logging.info('Invalid log_prob: {}'.format(log_prob))
             return None
 
         potential = -log_prob
@@ -184,9 +184,8 @@ class HMC(Algorithm):
     def sample(self, params_init, num_samples=0):
 
         assert params_init.dim() == 1, "``params_init`` must be a 1d tensor."
-        assert self._burn_in_steps <= num_samples, "``burn_in_steps`` must be less than "\
+        assert self._burn_in_steps >= num_samples, "``burn_in_steps`` must be less than "\
             "num_samples."
-
         # Invert mass matrix once (As mass is used in Gibbs resampling step)
         mass = None
         if self._inv_mass is not None:
@@ -279,6 +278,8 @@ class HMC(Algorithm):
                 return l_prior
 
             output = fmodel(x, params=params_unflattened)
+            if y is None and predict is True:
+                return None, output
 
             if self._model_loss is 'binary_class':
                 crit = nn.BCEWithLogitsLoss(reduction='sum')
@@ -314,7 +315,7 @@ class HMC(Algorithm):
             torch.cuda.empty_cache()
         return self.sample(self._params_init)
 
-    def predict_model(self, x, y, samples):      
+    def predict_model(self, x, y=None, samples=None):      
         param_shapes = []
         param_list = []
         build_tau = False
@@ -334,7 +335,10 @@ class HMC(Algorithm):
         pred_list = []
         for sample in samples:
             logprob, pred = self._log_prob_func(sample)
-            pred_log_prob_list.append(logprob.detach()) 
+            if y is not None:
+                pred_log_prob_list.append(logprob.detach()) 
+            else:
+                pred_log_prob_list.append(torch.tensor([]))
             pred_list.append(pred.detach())
 
         if torch.cuda.is_available():

@@ -24,6 +24,8 @@ from alf.tensor_specs import TensorSpec
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
+from scipy.stats import entropy
+import matplotlib.cm as cm
 
 
 class BNN(nn.Module):
@@ -353,40 +355,92 @@ class HMCTest(alf.test.TestCase):
     
     def generate_class_data(self,
         n_samples=100,
-        means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
+        means=[(2., 2.), (-2., 2.), (2., -2.), (-2., -2.)]):
+        #means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
+        #means=[(2., 2.), (-2., -2.)]):
+
         data = torch.zeros(n_samples, 2)
         labels = torch.zeros(n_samples)
         size = n_samples//len(means)
         for i, (x, y) in enumerate(means):
-            dist = torch.distributions.Normal(torch.tensor([x, y]), .1)
+            dist = torch.distributions.Normal(torch.tensor([x, y]), .3)
             samples = dist.sample([size])
             data[size*i:size*(i+1)] = samples
             labels[size*i:size*(i+1)] = torch.ones(len(samples)) * i
-        
+       
+        plt.scatter(data[:, 0].cpu(), data[:, 1].cpu())
+        plt.savefig('data_space.png')
         return data, labels.long()
     
+    def plot_bnn_classification(self, i, algorithm, samples, conf_style='mean',
+        tag=''):
+        x = torch.linspace(-10, 10, 100)
+        y = torch.linspace(-10, 10, 100)
+        gridx, gridy = torch.meshgrid(x, y)
+        grid = torch.stack((gridx.reshape(-1), gridy.reshape(-1)), -1)
+        outputs, _ = algorithm.predict_model(grid, y=None, samples=samples)
+        print (outputs.shape)
+        outputs = F.softmax(outputs, dim=-1)  # [B, D]
+        mean_outputs = outputs.mean(0).cpu()
+        std_outputs = outputs.std(0).cpu()
+
+        if conf_style == 'mean':
+            conf_outputs = mean_outputs.mean(-1)
+        elif conf_style == 'max':
+            conf_outputs = mean_outputs.max(-1)[0]
+        elif conf_style == 'min':
+            conf_outputs = mean_outputs.min(-1)[0]
+        elif conf_style == 'entropy':
+            conf_outputs = entropy(mean_outputs.T.numpy())
+        conf_mean = mean_outputs.mean(-1)
+        conf_std = std_outputs.max(-1)[0] * 1.96
+        labels = mean_outputs.argmax(-1)
+        data, _ = self.generate_class_data(n_samples=400) 
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs, cmap='rainbow')
+        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        cbar = plt.colorbar(p1)
+        cbar.set_label("{} confidance".format(conf_style))
+        plt.savefig('hmc_plots/conf_map{}-{}_{}.png'.format(i, conf_style, tag))
+        plt.close('all')
+
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std, cmap='rainbow')
+        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        cbar = plt.colorbar(p1)
+        cbar.set_label("confidance (std)")
+        plt.savefig('hmc_plots/conf_map{}-std_{}.png'.format(tag, i))
+        plt.close('all')
+        
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels, cmap='rainbow')
+        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        cbar = plt.colorbar(p1)
+        cbar.set_label("predicted labels")
+        plt.savefig('hmc_plots/conf_map{}-labels_{}.png'.format(tag, i))
+        plt.close('all')
+
 
     def test_BayesianNNClassification(self):
-        n_train = 400
-        n_test = 300
+        n_train = 100
+        n_test = 20
         inputs, targets = self.generate_class_data(n_train)
-        net = BNN([2, 32, 32, 4])
+        net = BNN([2, 10, 10, 4])
         params_init = torch.cat([p.flatten() for p in net.parameters()]).clone()
         tau_list = []
-        tau = 0.1
+        tau = 1.
         for p in net.parameters():
             tau_list.append(tau)
         tau_list = torch.tensor(tau_list)
-        step_size = 0.1
-        num_samples = 500
-        steps_per_sample = 10
-        tau_out = 100.
+        step_size = .005
+        num_samples = 10000
+        steps_per_sample = 25
+        tau_out = 1.
+        burn_in_steps= 9000
         print ('HMC: Fitting BNN to regression data')
         algorithm = HMC(
             params=params_init,
             num_samples=num_samples,
             steps_per_sample=steps_per_sample,
             step_size=step_size,
+            burn_in_steps=burn_in_steps,
             model=net,
             model_loss='classification',
             tau_list=tau_list,
@@ -408,7 +462,9 @@ class HMCTest(alf.test.TestCase):
 
         hmc_params = _train()
         bnn_preds = _test(hmc_params)
-        self.plot_bnn_classification(bnn_preds)
+        with torch.no_grad():
+            self.plot_bnn_classification(num_samples, algorithm, hmc_params,
+            'entropy', 'hmc_4means_l50_cmap')
 
    
 if __name__ == "__main__":

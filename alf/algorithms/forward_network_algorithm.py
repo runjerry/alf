@@ -169,6 +169,7 @@ class ForwardNetwork(Algorithm):
                 ensemble_size,
                 conv_layer_params=conv_layer_params,
                 fc_layer_params=fc_layer_params,
+                use_fc_bn=use_fc_bn,
                 activation=activation,
                 last_layer_size=last_layer_param,
                 last_activation=last_activation,
@@ -180,6 +181,7 @@ class ForwardNetwork(Algorithm):
                 input_tensor_spec,
                 conv_layer_params=conv_layer_params,
                 fc_layer_params=fc_layer_params,
+                use_fc_bn=use_fc_bn,
                 activation=activation,
                 last_layer_size=last_layer_param,
                 last_activation=last_activation,
@@ -451,7 +453,9 @@ class ForwardNetwork(Algorithm):
         else:
             neglogp = loss
         loss_grad = torch.autograd.grad(neglogp.sum(), net_outputs)[0]  # [N, D]
-        neglog_p_f = (loss_grad * critic_outputs).sum(1) # [N, D]
+        neglog_p_f = (loss_grad * critic_outputs).sum(1) # [N]
+        #print (neglog_p_f.shape)
+        neglog_p_f = neglog_p_f.squeeze(-1)
         tr_critic = self._approx_jacobian_trace(critic_outputs, net_outputs) # [N]
         lamb = 10
         stein_pq = -neglog_p_f + tr_critic.unsqueeze(1) # [n x 1]
