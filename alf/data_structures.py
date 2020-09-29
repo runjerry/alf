@@ -111,7 +111,8 @@ class TimeStep(
         """Get the cuda version of this data structure."""
         r = getattr(self, "_cuda", None)
         if r is None:
-            r = nest.map_structure(lambda x: x.cuda(), self)
+            r = nest.map_structure(
+                lambda x: x.cuda() if isinstance(x, torch.Tensor) else x, self)
             self._cuda = r
         return r
 
@@ -119,7 +120,8 @@ class TimeStep(
         """Get the cpu version of this data structure."""
         r = getattr(self, "_cpu", None)
         if r is None:
-            r = nest.map_structure(lambda x: x.cpu(), self)
+            r = nest.map_structure(
+                lambda x: x.cpu() if isinstance(x, torch.Tensor) else x, self)
             self._cpu = r
         return r
 
@@ -136,8 +138,10 @@ class Experience(
                 'env_id',
                 'action',
                 'rollout_info',  # AlgStep.info from rollout()
+                'state',  # state passed to rollout() to generate `action`
                 'batch_info',
-                'state'  # state passed to rollout() to generate `action`
+                'replay_buffer',
+                'rollout_info_field',
             ],
             default_value=())):
     """An ``Experience`` is a ``TimeStep`` in the context of training an RL algorithm.
@@ -150,6 +154,13 @@ class Experience(
         This is only used when experiece is passed as an argument for ``Algorithm.calc_loss()``.
         Different from other members, the shape of the tensors in ``batch_info``
         is [B], where B is the batch size.
+    - replay_buffer: The replay buffer where the batch_info generated from.
+        Currently, this field is available when experience is passed to
+        ``Algorithm.calc_loss()``, ``Algorithm.preprocess_experience()`` or
+        ``DataTransformer.transform_experience()``
+    - rollout_info_field: The name of the rollout_info field in replay buffer.
+        This is useful when an algorithm needs to access its rollout_info in
+        the replay buffer.
     """
 
     def is_first(self):

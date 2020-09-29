@@ -133,7 +133,7 @@ class NestMultiply(NestCombiner):
         return self._activation(ret)
 
 
-def stack_nests(nests):
+def stack_nests(nests, dim=0):
     """Stack tensors to a sequence.
 
     All the nest should have same structure and shape. In the resulted nest,
@@ -142,13 +142,16 @@ def stack_nests(nests):
 
     Args:
         nests (list[nest]): list of nests with same structure and shape.
+        dim (int): dimension to insert. Has to be between 0 and the number of
+            dimensions of concatenated tensors (inclusive)
     Returns:
         a nest with same structure as ``nests[0]``.
     """
     if len(nests) == 1:
-        return nest.map_structure(lambda tensor: tensor.unsqueeze(0), nests[0])
+        return nest.map_structure(lambda tensor: tensor.unsqueeze(dim),
+                                  nests[0])
     else:
-        return nest.map_structure(lambda *tensors: torch.stack(tensors),
+        return nest.map_structure(lambda *tensors: torch.stack(tensors, dim),
                                   *nests)
 
 
@@ -189,58 +192,6 @@ def get_outer_rank(tensors, specs):
     return outer_rank
 
 
-def transform_nest(nested, field, func):
-    """Transform the node of a nested structure indicated by ``field`` using
-    ``func``.
-
-    This function can be used to update our ``namedtuple`` structure conveniently,
-    comparing the following two methods:
-
-        .. code-block:: python
-
-            info = info._replace(rl=info.rl._replace(sac=info.rl.sac * 0.5))
-
-    vs.
-
-        .. code-block:: python
-
-            info = transform_nest(info, 'rl.sac', lambda x: x * 0.5)
-
-    The second method is usually shorter, more intuitive, and less error-prone
-    when ``field`` is a long string.
-
-    Args:
-        nested (nested Tensor): the structure to be applied the transformation.
-        field (str): If a string, it's the field to be transformed, multi-level
-            path denoted by "A.B.C". If ``None``, then the root object is
-            transformed.
-        func (Callable): transform func, the function will be called as
-            ``func(nested)`` and should return a new nest.
-    Returns:
-        transformed nest
-    """
-
-    def _traverse_transform(nested, levels):
-        if not levels:
-            return func(nested)
-        level = levels[0]
-        if nest.is_namedtuple(nested):
-            new_val = _traverse_transform(
-                nested=getattr(nested, level), levels=levels[1:])
-            return nested._replace(**{level: new_val})
-        elif isinstance(nested, dict):
-            new_val = nested.copy()
-            new_val[level] = _traverse_transform(
-                nested=nested[level], levels=levels[1:])
-            return new_val
-        else:
-            raise TypeError("If value is a nest, it must be either " +
-                            "a dict or namedtuple!")
-
-    return _traverse_transform(
-        nested=nested, levels=field.split('.') if field else [])
-
-
 def convert_device(nests):
     """Convert the device of the tensors in nests to default device."""
 
@@ -265,7 +216,7 @@ def convert_device(nests):
         raise NotImplementedError("Unknown device %s" % d)
 
 
-def grad(nested, objective):
+def grad(nested, objective, retain_graph=False):
     """Compute the gradients of an ``objective`` `w.r.t` each variable in
     ``nested``. It will simply call ``torch.autograd.grad`` after flattening the
     nest, and then pack the flat list back to a structure like ``nested``.
@@ -273,9 +224,14 @@ def grad(nested, objective):
     Args:
         nested (nest): a nest of variables that require grads.
         objective (Tensor): a tensor whose gradients will be computed.
+        retain_graph (bool): if True, after autograd the computational graph
+            won't be freed
     """
     return nest.pack_sequence_as(
-        nested, list(torch.autograd.grad(objective, nest.flatten(nested))))
+        nested,
+        list(
+            torch.autograd.grad(
+                objective, nest.flatten(nested), retain_graph=retain_graph)))
 
 
 def zeros_like(nested):

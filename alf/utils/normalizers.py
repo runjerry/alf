@@ -81,6 +81,43 @@ class Normalizer(nn.Module):
         self._mean_averager.update(tensor)
         sqr_tensor = alf.nest.map_structure(math_ops.square, tensor)
         self._m2_averager.update(sqr_tensor)
+        if alf.summary.should_record_summaries():
+            suffix = common.exe_mode_name()
+
+            def _reduce_along_batch_dims(x, mean, op):
+                spec = TensorSpec.from_tensor(mean)
+                bs = alf.layers.BatchSquash(get_outer_rank(x, spec))
+                x = bs.flatten(x)
+                x = op(x, dim=0)[0]
+                return x
+
+            def _summary(name, val):
+                with alf.summary.scope(self._name):
+                    if val.ndim == 0:
+                        alf.summary.scalar(name + "." + suffix, val)
+                    elif (val.shape[0] < self.MAX_DIMS_TO_OUTPUT
+                          and alf.summary.should_summarize_output()):
+                        for i in range(val.shape[0]):
+                            alf.summary.scalar(
+                                name + "_" + str(i) + "." + suffix, val[i])
+                    else:
+                        alf.summary.scalar(name + ".min." + suffix, val.min())
+                        alf.summary.scalar(name + ".max." + suffix, val.max())
+
+            def _summarize_all(t, m, m2, path):
+                if path:
+                    path += "."
+                _summary(path + "tensor.batch_min",
+                         _reduce_along_batch_dims(t, m, torch.min))
+                _summary(path + "tensor.batch_max",
+                         _reduce_along_batch_dims(t, m, torch.max))
+                _summary(path + "mean", m)
+                _summary(path + "var", m2 - math_ops.square(m))
+
+            alf.nest.py_map_structure_with_path(_summarize_all, tensor,
+                                                self._mean_averager.get(),
+                                                self._m2_averager.get())
+
 
     def normalize(self, tensor, clip_value=-1.0):
         """
@@ -194,6 +231,7 @@ class EMNormalizer(Normalizer):
         return EMAverager(self._tensor_spec, self._update_rate)
 
 
+@gin.configurable
 class ScalarEMNormalizer(EMNormalizer):
     def __init__(self,
                  update_rate=1e-3,
@@ -244,6 +282,7 @@ class AdaptiveNormalizer(Normalizer):
             tensor_spec=self._tensor_spec, speed=self._speed)
 
 
+@gin.configurable
 class ScalarAdaptiveNormalizer(AdaptiveNormalizer):
     def __init__(self,
                  speed=8.0,

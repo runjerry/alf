@@ -10,3 +10,5 @@ Notes
     notes/estimating_derivative_of_expectation
     notes/preview_doc_website
     notes/howto_docstring
+    notes/fetch_env_sac_actrepeat_notes
+    notes/sac_with_hybrid_action_types

@@ -35,7 +35,7 @@ def _check_action_specs_for_critic_networks(
     if len(nest.flatten(action_spec)) > 1:
         assert action_preprocessing_combiner is not None, (
             "An action combiner is needed when there are multiple action specs:"
-            " %s" % action_spec)
+            " {}".format(action_spec))
 
     def _check_individual(spec, proc):
         if spec.is_discrete:
@@ -74,6 +74,7 @@ class CriticNetwork(Network):
                  joint_fc_layer_params=None,
                  activation=torch.relu_,
                  kernel_initializer=None,
+                 use_fc_bn=False,
                  name="CriticNetwork"):
         """
 
@@ -105,6 +106,8 @@ class CriticNetwork(Network):
             kernel_initializer (Callable): initializer for all the layers but
                 the last layer. If none is provided a variance_scaling_initializer
                 with uniform distribution will be used.
+            use_fc_bn (bool): whether use Batch Normalization for the internal
+                FC layers (i.e. FC layers beside the last one).
             name (str):
         """
         super().__init__(input_tensor_spec, name=name)
@@ -126,6 +129,7 @@ class CriticNetwork(Network):
             fc_layer_params=observation_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
+            use_fc_bn=use_fc_bn,
             name=self.name + ".obs_encoder")
 
         _check_action_specs_for_critic_networks(action_spec,
@@ -138,6 +142,7 @@ class CriticNetwork(Network):
             fc_layer_params=action_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
+            use_fc_bn=use_fc_bn,
             name=self.name + ".action_encoder")
 
         last_kernel_initializer = functools.partial(
@@ -151,6 +156,7 @@ class CriticNetwork(Network):
             kernel_initializer=kernel_initializer,
             last_layer_size=1,
             last_activation=math_ops.identity,
+            use_fc_bn=use_fc_bn,
             last_kernel_initializer=last_kernel_initializer,
             name=self.name + ".joint_encoder")
 

@@ -61,7 +61,7 @@ class DdpgAlgorithm(OffPolicyAlgorithm):
                  actor_network_ctor=ActorNetwork,
                  critic_network_ctor=CriticNetwork,
                  use_parallel_network=False,
-                 observation_transformer=math_ops.identity,
+                 reward_weights=None,
                  env=None,
                  config: TrainerConfig = None,
                  ou_stddev=0.2,
@@ -91,8 +91,9 @@ class DdpgAlgorithm(OffPolicyAlgorithm):
                 ``forward((observation, action), state)``.
             use_parallel_network (bool): whether to use parallel network for
                 calculating critics.
-            observation_transformer (Callable or list[Callable]): transformation(s)
-                applied to ``time_step.observation``.
+            reward_weights (list[float]): this is only used when the reward is
+                multidimensional. In that case, the weighted sum of the q values
+                is used for training the actor.
             num_critic_replicas (int): number of critics to be used. Default is 1.
             env (Environment): The environment to interact with. env is a batched
                 environment, which means that it runs multiple simulations
@@ -125,6 +126,7 @@ class DdpgAlgorithm(OffPolicyAlgorithm):
             debug_summaries (bool): True if debug summaries should be created.
             name (str): The name of this algorithm.
         """
+
         critic_network = critic_network_ctor(
             input_tensor_spec=(observation_spec, action_spec))
         actor_network = actor_network_ctor(
@@ -150,7 +152,6 @@ class DdpgAlgorithm(OffPolicyAlgorithm):
             action_spec,
             train_state_spec=train_state_spec,
             env=env,
-            observation_transformer=observation_transformer,
             config=config,
             debug_summaries=debug_summaries,
             name=name)

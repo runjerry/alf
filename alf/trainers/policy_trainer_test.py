@@ -19,7 +19,8 @@ import torch
 import alf
 from alf.algorithms.hypernetwork_algorithm import HyperNetwork
 from alf.algorithms.rl_algorithm_test import MyEnv, MyAlg
-from alf.trainers.policy_trainer import RLTrainer, SLTrainer, TrainerConfig, play
+from alf.trainers.policy_trainer import RLTrainer, TrainerConfig, play
+from alf.trainers.policy_trainer import create_dataset, SLTrainer
 from alf.utils import common
 
 
@@ -32,6 +33,12 @@ class MyRLTrainer(RLTrainer):
         if register:
             self._register_env(env)
         return env
+
+
+class MySLTrainer(SLTrainer):
+    def _create_dataset(self):
+        return create_dataset(
+            dataset_name='test', train_batch_size=50, test_batch_size=10)
 
 
 class TrainerTest(alf.test.TestCase):
@@ -54,7 +61,7 @@ class TrainerTest(alf.test.TestCase):
             time_step = common.get_initial_time_step(env)
             state = alg.get_initial_predict_state(env.batch_size)
             policy_step = alg.rollout_step(time_step, state)
-            logits = policy_step.info.base_dist.logits
+            logits = policy_step.info.logits
             print("logits: ", logits)
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 0]))
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 2]))
@@ -67,7 +74,7 @@ class TrainerTest(alf.test.TestCase):
             time_step = common.get_initial_time_step(env)
             state = alg.get_initial_predict_state(env.batch_size)
             policy_step = alg.rollout_step(time_step, state)
-            logits = policy_step.info.base_dist.logits
+            logits = policy_step.info.logits
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 0]))
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 2]))
 
@@ -77,36 +84,43 @@ class TrainerTest(alf.test.TestCase):
             # TODO: test play. Need real env to test.
 
     def test_sl_trainer(self):
-        CONV_LAYER_PARAMS = ((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
-        FC_LAYER_PARAMS = ((84, True), )
-        HIDDEN_LAYERS = (64, 64)
         with tempfile.TemporaryDirectory() as root_dir:
             conf = TrainerConfig(
                 algorithm_ctor=functools.partial(
                     HyperNetwork,
-                    conv_layer_params=CONV_LAYER_PARAMS,
-                    fc_layer_params=FC_LAYER_PARAMS,
-                    hidden_layers=HIDDEN_LAYERS,
+                    hidden_layers=None,
+                    loss_type='regression',
                     optimizer=alf.optimizers.Adam(lr=1e-4, weight_decay=1e-4)),
                 root_dir=root_dir,
-                num_checkpoints=2,
+                num_checkpoints=1,
                 evaluate=True,
                 eval_interval=1,
-                num_epochs=2)
+                num_iterations=1)
 
             # test train
-            trainer = SLTrainer(conf)
+            trainer = MySLTrainer(conf)
             self.assertEqual(SLTrainer.progress(), 0)
             trainer.train()
             self.assertEqual(SLTrainer.progress(), 1)
 
-            # # test checkpoint
-            # conf.num_epochs = 4
-            # new_trainer = SLTrainer(conf)
-            # new_trainer._restore_checkpoint()
-            # self.assertEqual(SLTrainer.progress(), 0.5)
-            # new_trainer.train()
-            # self.assertEqual(SLTrainer.progress(), 1)
+            # test checkpoint
+            conf2 = TrainerConfig(
+                algorithm_ctor=functools.partial(
+                    HyperNetwork,
+                    hidden_layers=None,
+                    loss_type='regression',
+                    optimizer=alf.optimizers.Adam(lr=1e-4, weight_decay=1e-4)),
+                root_dir=root_dir,
+                num_checkpoints=1,
+                evaluate=True,
+                eval_interval=1,
+                num_iterations=2)
+
+            new_trainer = MySLTrainer(conf2)
+            new_trainer._restore_checkpoint()
+            self.assertEqual(SLTrainer.progress(), 0.5)
+            new_trainer.train()
+            self.assertEqual(SLTrainer.progress(), 1)
 
 
 if __name__ == "__main__":

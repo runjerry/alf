@@ -31,7 +31,7 @@ class ParamConvNet(Network):
                  conv_layer_params,
                  same_padding=False,
                  activation=torch.relu_,
-                 use_bias=True,
+                 use_bias=False,
                  flatten_output=False,
                  name="ParamConvNet"):
         """A fully 2D conv network that does not maintain its own network parameters,
@@ -256,8 +256,8 @@ class ParamNetwork(Network):
         if theta.ndim == 1:
             theta = theta.unsqueeze(0)
         assert (theta.ndim == 2 and theta.shape[1] == self.param_length), (
-            "Input theta has wrong shape {}. Expecting shape (, {})".format(
-            theta.shape, self.param_length))
+            "Input theta has wrong shape %s. Expecting shape (, %d)" %
+            self.param_length)
         if self._conv_net is not None:
             split = self._conv_net.param_length
             conv_theta = theta[:, :split]
