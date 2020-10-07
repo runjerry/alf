@@ -197,9 +197,9 @@ def expand_dims_as(x, y):
     Returns:
         ``x`` with extra singular dimensions.
     """
-    assert len(x.shape) <= len(y.shape)
+    assert x.ndim <= y.ndim
     assert x.shape == y.shape[:len(x.shape)]
-    k = len(y.shape) - len(x.shape)
+    k = y.ndim - x.ndim
     if k == 0:
         return x
     else:
@@ -710,42 +710,107 @@ def detach(nests):
     return nest.map_structure(lambda t: t.detach(), nests)
 
 
-_training = False
+# A catch all mode.  Currently includes on-policy training on unrolled experience.
+EXE_MODE_OTHER = 0
+# Unroll during training
+EXE_MODE_ROLLOUT = 1
+# Replay, policy evaluation on experience and training
+EXE_MODE_REPLAY = 2
+# Evaluation / testing or playing a learned model
+EXE_MODE_EVAL = 3
+
+# Global execution mode to track where the program is in the RL training process.
+# This is used currently for observation normalization to only update statistics
+# during training (vs unroll).  This is also used in tensorboard plotting of
+# network output values, evaluation of the same network during rollout vs eval vs
+# replay will be plotted to different graphs.
+_exe_mode = EXE_MODE_OTHER
+_exe_mode_strs = ["other", "rollout", "replay", "eval"]
 
 
-def set_training(training=True):
+def set_exe_mode(mode):
     """Mark whether the current code belongs to unrolling or training. This flag
     might be used to change the behavior of some functions accordingly.
 
     Args:
         training (bool): True for training, False for unrolling
     """
-    global _training
-    _training = training
+    global _exe_mode
+    _exe_mode = mode
 
 
-def is_training():
+def exe_mode_name():
+    """return the execution mode as string.
+    """
+    return _exe_mode_strs[_exe_mode]
+
+
+def is_replay():
     """Return a bool value indicating whether the current code belongs to
     unrolling or training.
     """
-    return _training
+    return _exe_mode == EXE_MODE_REPLAY
 
 
-def mark_training(train_func):
-    """A decorator that will automatically mark the ``_training`` flag when
-    entering/exiting a training function.
+def is_rollout():
+    """Return a bool value indicating whether the current code belongs to
+    unrolling or training.
+    """
+    return _exe_mode == EXE_MODE_ROLLOUT
+
+
+def mark_eval(func):
+    """A decorator that will automatically mark the ``_exe_mode`` flag when
+    entering/exiting a evaluation/test function.
 
     Args:
-        train_func (Callable): a training function
+        func (Callable): a function
     """
 
-    def _train_func(*args, **kwargs):
-        set_training(True)
-        ret = train_func(*args, **kwargs)
-        set_training(False)
+    def _func(*args, **kwargs):
+        old_mode = _exe_mode
+        set_exe_mode(EXE_MODE_EVAL)
+        ret = func(*args, **kwargs)
+        set_exe_mode(old_mode)
         return ret
 
-    return _train_func
+    return _func
+
+
+def mark_replay(func):
+    """A decorator that will automatically mark the ``_exe_mode`` flag when
+    entering/exiting a experience replay function.
+
+    Args:
+        func (Callable): a function
+    """
+
+    def _func(*args, **kwargs):
+        old_mode = _exe_mode
+        set_exe_mode(EXE_MODE_REPLAY)
+        ret = func(*args, **kwargs)
+        set_exe_mode(old_mode)
+        return ret
+
+    return _func
+
+
+def mark_rollout(func):
+    """A decorator that will automatically mark the ``_exe_mode`` flag when
+    entering/exiting a rollout function.
+
+    Args:
+        func (Callable): a function
+    """
+
+    def _func(*args, **kwargs):
+        old_mode = _exe_mode
+        set_exe_mode(EXE_MODE_ROLLOUT)
+        ret = func(*args, **kwargs)
+        set_exe_mode(old_mode)
+        return ret
+
+    return _func
 
 
 @gin.configurable

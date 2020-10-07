@@ -509,6 +509,7 @@ class EncodingNetwork(PreprocessorNetwork):
                  last_layer_size=None,
                  last_activation=None,
                  last_kernel_initializer=None,
+                 last_use_fc_bn=False,
                  name="EncodingNetwork"):
         """
         Args:
@@ -620,6 +621,7 @@ class EncodingNetwork(PreprocessorNetwork):
                     input_size,
                     last_layer_size,
                     activation=last_activation,
+                    use_bn=last_use_fc_bn,
                     kernel_initializer=last_kernel_initializer))
             input_size = last_layer_size
 

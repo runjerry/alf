@@ -71,7 +71,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         For a linear generator with weight W and bias b, and takes standard Gaussian 
         noise as input, the output follows a Gaussian :math:`N(b, WW^T)`, which should 
         match the posterior :math:`p(\beta|X,y)` for both ``svgd``, ``gfsf``, and
-        ``minmax``
+        ``minmax``.
         
         """
         input_size = 3

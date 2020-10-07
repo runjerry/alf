@@ -56,6 +56,110 @@ def load_test(train_bs=50, test_bs=10, num_workers=0):
     return train_loader, test_loader
 
 
+def get_classes(target, labels):
+    """ select only given classes from target dataset """
+    label_indices = []
+    for i in range(len(target)):
+        if target[i][1] in labels:
+            label_indices.append(i)
+    return label_indices
+
+
+def load_mnist_inlier(train_bs=100, test_bs=100, num_workers=0):
+    """ load a subset of the MNIST dataset. For OOD experiments the 
+        standard is a 6-4 inlier-outlier split. This function only 
+        loads the inlier portion of the split
+    """
+    torch.cuda.manual_seed(1)
+    kwargs = {
+        'num_workers': num_workers,
+        'pin_memory': False,
+        'drop_last': False
+    }
+    path = 'data_m/'
+    
+    label_idx = [0, 1, 2, 3, 4, 5]
+
+    trainset = datasets.MNIST(
+        path,
+        train=True,
+        download=True,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307, ), (0.3081, ))]))
+    
+    trainset = torch.utils.data.Subset(trainset, get_classes(
+        trainset, label_idx))
+    train_loader = torch.utils.data.DataLoader(
+        trainset,
+        batch_size=train_bs,
+        shuffle=True,
+        **kwargs)
+
+    testset = datasets.MNIST(
+        path,
+        train=False,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307, ), (0.3081, ))]))
+
+    testset = torch.utils.data.Subset(testset, get_classes(
+        testset, label_idx))
+    test_loader = torch.utils.data.DataLoader(
+        testset,
+        batch_size=test_bs,
+        shuffle=False,
+        **kwargs)
+    return train_loader, test_loader
+
+
+def load_mnist_outlier(train_bs=100, test_bs=100, num_workers=0):
+    """ load the outlier subset of the MNIST dataset. This function 
+        only loads the outlier portion of the split
+    """
+    torch.cuda.manual_seed(1)
+    kwargs = {
+        'num_workers': num_workers,
+        'pin_memory': False,
+        'drop_last': False
+    }
+    path = 'data_m/'
+    
+    label_idx = [6, 7, 8, 9]
+
+    trainset = datasets.MNIST(
+        path,
+        train=True,
+        download=True,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307, ), (0.3081, ))]))
+    
+    trainset = torch.utils.data.Subset(trainset, get_classes(
+        trainset, label_idx))
+    train_loader = torch.utils.data.DataLoader(
+        trainset,
+        batch_size=train_bs,
+        shuffle=True,
+        **kwargs)
+
+    testset = datasets.MNIST(
+        path,
+        train=False,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307, ), (0.3081, ))]))
+
+    testset = torch.utils.data.Subset(testset, get_classes(
+        testset, label_idx))
+    test_loader = torch.utils.data.DataLoader(
+        testset,
+        batch_size=test_bs,
+        shuffle=False,
+        **kwargs)
+    return train_loader, test_loader
+
+
 def load_mnist(train_bs=100, test_bs=100, num_workers=0):
     kwargs = {
         'num_workers': num_workers,

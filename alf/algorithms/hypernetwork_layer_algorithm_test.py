@@ -95,12 +95,15 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         # plt.show()
         plt.close('all')
 
-    @parameterized.parameters(('minmax', 512, 100),
-                              ('gfsf'), ('svgd2'), ('svgd3'))
+    @parameterized.parameters(#('gfsf'), ('svgd2'), ('svgd3'), ('minmax'),
+                              ('gfsf', True),
+                              ('svgd3', True),
+                              ('minmax', False))
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
-                                        particles=512,
-                                        train_batch_size=20):
+                                        function_vi=False,
+                                        train_batch_size=10,
+                                        num_particles=128):
         """
         The hypernetwork is trained to generate the parameter vector for a linear
         regressor. The target linear regressor is :math:`y = X\beta + e`, where 
@@ -109,11 +112,11 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         closed-form :math:`p(\beta|X,y)\sim N((X^TX)^{-1}X^Ty, X^TX)`.
         For a linear generator with weight W and bias b, and takes standard Gaussian 
         noise as input, the output follows a Gaussian :math:`N(b, WW^T)`, which should 
-        match the posterior :math:`p(\beta|X,y)` for both svgd and gfsf.
-        
+        match the posterior :math:`p(\beta|X,y)` for both ``svgd``, ``gfsf``, and
+        ``minmax``.
         """
 
-        print ("Testing {} with {} particles".format(par_vi, particles))
+        print ("Testing {} with {} particles".format(par_vi, num_particles))
         input_size = 3
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
@@ -124,20 +127,27 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         noise = torch.randn(batch_size, output_dim)
         targets = inputs @ beta + noise
         true_cov = torch.inverse(
-            inputs.t() @ inputs)  # + torch.eye(input_size))
+            inputs.t() @ inputs) 
         true_mean = true_cov @ inputs.t() @ targets
         noise_dim = 3
+        parameterization = 'layer'
         algorithm = HyperNetwork(
             input_tensor_spec=input_spec,
             last_layer_param=(output_dim, False),
             last_activation=math_ops.identity,
             noise_dim=noise_dim,
-            # hidden_layers=(16, ),
             hidden_layers=None,
             loss_type='regression',
             par_vi=par_vi,
-            parameterization='layer',
-            optimizer=alf.optimizers.Adam(lr=1e-4))
+            function_vi=function_vi,
+            function_bs=train_batch_size,
+            function_space_samples=1,
+            parameterization=parameterization,
+            optimizer=alf.optimizers.Adam(lr=1e-3),
+            critic_hidden_layers=(100, 100),
+            critic_fc_bn=True,
+            critic_optimizer=alf.optimizers.Adam(lr=1e-3),
+            critic_train_iters=5)
         print("ground truth mean: {}".format(true_mean))
         print("ground truth cov norm: {}".format(true_cov.norm()))
         print("ground truth cov: {}".format(true_cov))
@@ -156,66 +166,75 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = algorithm.train_step(
                 inputs=(train_inputs, train_targets),
                 entropy_regularization=entropy_regularization,
-                particles=particles)
+                num_particles=num_particles)
 
-            algorithm.update_with_gradient(alg_step.info)
+            loss_info, params = algorithm.update_with_gradient(alg_step.info)
         
-        def _test(i):
-
-            params = algorithm.sample_parameters(particles=200)
-            computed_mean = params.mean(0)
-            computed_cov = self.cov(params)
+        def _test(i, sampled_predictive=True):
 
             print("-" * 68)
-            
-            weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
-            print("norm of generator weight: {}".format(weight.norm()))
+            if parameterization == 'layer':
+                weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
+                learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
+            else:
+                weight = algorithm._generator._net._fc_layers[0].weight
+                learned_mean = algorithm._generator._net._fc_layers[0].bias
+
             learned_cov = weight @ weight.t()
-            learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
-
-            pred_step = algorithm.predict_step(inputs, params=params)
-            sampled_preds = pred_step.output.squeeze()  # [batch, particles]
-
-            computed_preds = inputs @ computed_mean  # [batch]
+            print("norm of generator weight: {}".format(weight.norm()))
+            print("norm of learned cov: {}".format(learned_cov.norm()))
+           
             predicts = inputs @ learned_mean  # [batch]
-
-            spred_err = torch.norm((sampled_preds - targets).mean(1))
             pred_err = torch.norm(predicts - targets.squeeze())
-            
-            smean_err = torch.norm(computed_mean - true_mean.squeeze())
-            smean_err = smean_err / torch.norm(true_mean)
-            
+
             mean_err = torch.norm(learned_mean - true_mean.squeeze())
             mean_err = mean_err / torch.norm(true_mean)
-
-            scov_err = torch.norm(computed_cov - true_cov)
-            scov_err = scov_err / torch.norm(true_cov)
 
             cov_err = torch.norm(learned_cov - true_cov)
             cov_err = cov_err / torch.norm(true_cov)
             
             print("Train Iter: {}".format(i))
-            print("\tPred err {}".format(pred_err))
-            print("\tSampled pred err {}".format(spred_err))
-            print("\tMean err {}".format(mean_err))
-            print("\tSampled mean err {}".format(smean_err))
-            print("\tCov err {}".format(cov_err))
-            print("\tSampled cov err {}".format(scov_err))
-            print("learned_cov norm: {}".format(learned_cov.norm()))
-            
-            #self.plot_predictions(inputs, targets, computed_preds, i)
-            #self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
+            print("\tpred err {}".format(pred_err))
+            print("\tmean err {}".format(mean_err))
+            print("\tcov err {}".format(cov_err))
+
+            if sampled_predictive:
+                params = algorithm.sample_parameters(num_particles=200)
+                pred_step = algorithm.predict_step(inputs, params=params)
+                sampled_preds = pred_step.output.squeeze(
+                )  # [batch, n_particles]
+                spred_err = torch.norm((sampled_preds - targets).mean(1))
+                print("train_iter {}: sampled pred err {}".format(
+                    i, spred_err))
+
+                computed_mean = params.mean(0)
+                smean_err = torch.norm(computed_mean - true_mean.squeeze())
+                smean_err = smean_err / torch.norm(true_mean)
+                print("train_iter {}: sampled mean err {}".format(
+                    i, smean_err))
+
+                computed_cov = self.cov(params)
+                scov_err = torch.norm(computed_cov - true_cov)
+                scov_err = scov_err / torch.norm(true_cov)
+                print("train_iter {}: sampled cov err {}".format(i, scov_err))
+
+            self.plot_predictions(inputs, targets, predicts, i)
+            self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
         
-        train_iter = 30000
+        train_iter = 5000
         for i in range(train_iter):
             _train(i)
             if i % 1000 == 0:
                 _test(i)
 
-        learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
+        if parameterization == 'layer':
+            weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
+            learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
+        else:
+            weight = algorithm._generator._net._fc_layers[0].weight
+            learned_mean = algorithm._generator._net._fc_layers[0].bias
         mean_err = torch.norm(learned_mean - true_mean.squeeze())
         mean_err = mean_err / torch.norm(true_mean)
-        weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
         learned_cov = weight @ weight.t()
         cov_err = torch.norm(learned_cov - true_cov)
         cov_err = cov_err / torch.norm(true_cov)
@@ -225,117 +244,6 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
 
         self.assertLess(mean_err, 0.5)
         self.assertLess(cov_err, 0.5)
-
-    @parameterized.parameters(
-        ('gfsf', 32, 100),
-        ('svgd2', 32, 100),
-        ('svgd3', 32, 100),
-        ('minmax', 32, 100))
-    def test_hypernetwork_classification(self,
-                                         par_vi=None,
-                                         particles=32,
-                                         train_batch_size=100):
-        # If simply use a linear classifier with random weights,
-        # the cross_entropy loss does not seem to capture the distribution.
-
-        # Simple MLP to start with, soft voting for prediction. 
-        # OOD score is the AUCROC of the predictive entropy
-
-        print ('Testing {} method with {} particles'.format(par_vi, particles))
-        
-        # import training data
-        train_inlier, test_inlier = datagen.load_mnist(
-            train_bs=train_batch_size,
-            test_bs=100)
-        train_outlier, test_outlier = datagen.load_notmnist(
-            train_bs=train_batch_size,
-            test_bs=100)
-        
-        particles = 10
-        noise_dim = 256
-        output_dim = len(test_inlier.dataset.classes)
-        input_spec = TensorSpec(shape=test_inlier.dataset[0][0].shape)
-        
-        config = TrainerConfig(
-            root_dir='./',
-            summarize_grads_and_vars=False,
-            debug_summaries=False,
-            )
-
-        algorithm = HyperNetwork(
-            input_tensor_spec=input_spec,
-            conv_layer_params=((6, 5, 1, 2, 4), (16, 5, 1, 0, 2), ),
-            fc_layer_params=((16, True), ),
-            last_layer_param=(output_dim, True),
-            last_activation=math_ops.identity,
-            particles=particles,
-            noise_dim=noise_dim,
-            hidden_layers=(100, 100, ),
-            loss_type='classification',
-            parameterization='layer',
-            par_vi=par_vi,
-            optimizer=alf.optimizers.Adam(lr=1e-4, weight_decay=1e-4),
-            logging_evaluate=True,
-            logging_training=True,
-            config=config)
-
-        algorithm.set_data_loader(train_inlier, test_inlier)
-
-        def _train(i):
-            print ('==> Begin Training Epoch ', i)
-            algorithm.train_iter()
-            algorithm.evaluate()
-
-        def auc_score(inliers, outliers):
-            y_true = np.array([0] * len(inliers) + [1] * len(outliers))
-            y_score = np.concatenate([inliers, outliers])
-            return roc_auc_score(y_true, y_score)
-        
-        def predict_dataset(testset, particles):
-            correct = 0.
-            model_outputs = torch.zeros(particles, len(testset.dataset), output_dim)
-            for batch, (data, target) in enumerate(testset):
-                data = data.to(alf.get_default_device())
-                target = target.to(alf.get_default_device())
-                output, _ = algorithm._param_net(data)
-                probs = F.softmax(output, dim=-1)
-                pred = probs.mean(1).cpu()
-                vote = pred.argmax(-1)
-                correct += vote.eq(target.cpu().view_as(vote)).float().cpu().sum()
-                output = output.transpose(0, 1)
-                model_outputs[:, batch*len(data): (batch+1)*len(data), :] = output
-            return model_outputs, correct
-
-        def _test(i):
-            # Soft voting for now
-            params = algorithm.sample_parameters(particles=100)
-            if par_vi == 'minmax':
-                params = params[0]
-            algorithm._param_net.set_parameters(params)
-            with torch.no_grad():
-                outputs, correct = predict_dataset(
-                    test_inlier,
-                    particles=100)
-            print ('Testing Accuracy: {}%'.format(
-                correct/len(test_inlier.dataset)*100))
-            probs = F.softmax(outputs, -1).mean(0)
-            entropy = entropy_fn(probs.T.cpu().detach().numpy())
-
-            with torch.no_grad():
-                outputs_outlier, correct_outlier = predict_dataset(
-                    test_outlier,
-                    particles=100)
-            probs_outlier = F.softmax(outputs_outlier, -1).mean(0)
-            entropy_outlier = entropy_fn(probs_outlier.T.cpu().detach().numpy())
-            auroc_entropy = auc_score(entropy, entropy_outlier)
-            print ('AUROC score: {}'.format(auroc_entropy))
-
-        train_epochs = 300
-        for i in range(train_epochs):
-            _train(i)
-            _test(i)
-
-
 
 if __name__ == "__main__":
     alf.test.main()

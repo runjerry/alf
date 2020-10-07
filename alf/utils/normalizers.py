@@ -14,6 +14,7 @@
 
 from abc import abstractmethod
 
+import gin
 import torch
 import torch.nn as nn
 
@@ -25,6 +26,8 @@ from alf.utils.averager import WindowAverager, EMAverager, AdaptiveAverager
 
 
 class Normalizer(nn.Module):
+    MAX_DIMS_TO_OUTPUT = 30
+
     def __init__(self,
                  tensor_spec,
                  auto_update=True,
@@ -117,7 +120,6 @@ class Normalizer(nn.Module):
             alf.nest.py_map_structure_with_path(_summarize_all, tensor,
                                                 self._mean_averager.get(),
                                                 self._m2_averager.get())
-
 
     def normalize(self, tensor, clip_value=-1.0):
         """
@@ -246,6 +248,7 @@ class ScalarEMNormalizer(EMNormalizer):
             name=name)
 
 
+@gin.configurable
 class AdaptiveNormalizer(Normalizer):
     def __init__(self,
                  tensor_spec,

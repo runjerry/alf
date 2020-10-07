@@ -23,7 +23,7 @@ import alf
 from alf.algorithms.generator import Generator
 from alf.networks import Network
 from alf.tensor_specs import TensorSpec
-from alf.algorithms.forward_network_algorithm import ForwardNetwork
+from alf.algorithms.sl_algorithm import SLAlgorithm
 from alf.utils import math_ops
 
 
@@ -65,32 +65,20 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
-<<<<<<< HEAD
-        dict(entropy_regularization=1.0, par_vi='minmax'),
-=======
->>>>>>> remotes/upstream/minmax_svgd
         dict(entropy_regularization=1.0, par_vi='gfsf'),
         dict(entropy_regularization=1.0, par_vi='svgd'),
         dict(entropy_regularization=1.0, par_vi='svgd2'),
         dict(entropy_regularization=1.0, par_vi='svgd3'),
-<<<<<<< HEAD
-=======
         dict(entropy_regularization=1.0, par_vi='minmax'),
->>>>>>> remotes/upstream/minmax_svgd
         dict(entropy_regularization=0.0),
         dict(entropy_regularization=0.0, mi_weight=1),
     )
     def test_generator_unconditional(self,
-<<<<<<< HEAD
-                                     entropy_regularization=0.0,
-                                     par_vi=None,
-=======
                                      entropy_regularization=1.0,
-                                     par_vi='minmax',
->>>>>>> remotes/upstream/minmax_svgd
+                                     par_vi=None,
                                      mi_weight=None):
-        """
-        The generator is trained to match(STEIN)/maximize(ML) the likelihood
+        r"""
+        The generator is trained to match (STEIN) / maximize (ML) the likelihood
         of a Gaussian distribution with zero mean and diagonal variance :math:`(1, 4)`.
         After training, :math:`w^T w` is the variance of the distribution implied by the
         generator. So it should be :math:`diag(1,4)` for STEIN and 0 for 'ML'.
@@ -100,11 +88,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         dim = 2
         batch_size = 512
         net = Net(dim)
-<<<<<<< HEAD
-        d_iters = 5
-=======
         hidden_size = 10
->>>>>>> remotes/upstream/minmax_svgd
         generator = Generator(
             dim,
             noise_dim=3,
@@ -112,24 +96,19 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             net=net,
             mi_weight=mi_weight,
             par_vi=par_vi,
-<<<<<<< HEAD
             optimizer=alf.optimizers.AdamTF(lr=1e-3))
         
         if par_vi == 'minmax':
-            critic = ForwardNetwork(
+            critic = SLAlgorithm(
                 TensorSpec(shape=(dim, ) ),
-                fc_layer_params=(100, 100),
+                fc_layer_params=(hidden_size, hidden_size),
                 last_layer_param=dim,
+                use_fc_bn=True,
                 last_activation=math_ops.identity,
                 optimizer=alf.optimizers.AdamTF(lr=1e-3))
-            self._d_iters = 5
+            self._critic_train_iters = 2
         else:
             critic = None
-=======
-            critic_hidden_layers=(hidden_size, hidden_size),
-            optimizer=alf.optimizers.AdamTF(lr=1e-3),
-            critic_optimizer=alf.optimizers.AdamTF(lr=1e-3))
->>>>>>> remotes/upstream/minmax_svgd
 
         var = torch.tensor([1, 4], dtype=torch.float32)
         precision = 1. / var
@@ -141,9 +120,10 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
 
         def _train(i):
             if par_vi == 'minmax':
-                for _ in range(self._d_iters):
+                for _ in range(self._critic_train_iters):
                     outputs, _ = generator._predict(batch_size=batch_size)
-                    critic.predict_with_update(outputs, _neglogprob)
+                    critic._critic_train_step(outputs, _neglogprob,
+                        entropy_regularization=entropy_regularization)
                 outputs, _ = generator._predict(batch_size=batch_size)
                 critic_outputs = critic._net(outputs)[0].detach()
                 outputs = (outputs, critic_outputs)
@@ -155,9 +135,8 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
                 loss_func=_neglogprob,
                 batch_size=batch_size)
             generator.update_with_gradient(alg_step.info)
-            generator.after_update(alg_step.info)
 
-        for i in range(6000):
+        for i in range(5000):
             _train(i)
             learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
             if i % 500 == 0:

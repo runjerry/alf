@@ -41,8 +41,30 @@ class BNN(nn.Module):
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         return self.linear3(x)
-        
+ 
 
+class BNN2(nn.Module):
+    def __init__(self, n_hidden):
+        super(BNN2, self).__init__()
+        self.n_hiden = n_hidden
+        self.layers = []
+        self.linear1 = nn.Linear(n_hidden[0], n_hidden[1], bias=False)
+
+    def forward(self, x):
+        return self.linear1(x)
+              
+class BNN3(nn.Module):
+    def __init__(self, n_hidden):
+        super(BNN3, self).__init__()
+        self.n_hiden = n_hidden
+        self.layers = []
+        self.linear1 = nn.Linear(n_hidden[0], n_hidden[1], bias=True)
+        self.linear2 = nn.Linear(n_hidden[1], n_hidden[2], bias=True)
+
+    def forward(self, x):
+        x = F.relu(self.linear1(x))
+        return self.linear2(x)
+ 
 class HMCTest(alf.test.TestCase):
 
     def log_prob_1dGaussian(self, data):
@@ -60,25 +82,6 @@ class HMCTest(alf.test.TestCase):
         dist = torch.distributions.MultivariateNormal(means, torch.diag(stdev**2))
         logp_x = dist.log_prob(data)
         return logp_x
-
-    def plot_hmc_1d(self, inputs):
-        mean = torch.tensor([0., 0., 0.]).cpu()
-        stdev = torch.tensor([0.5, 1.0, 2.0]).cpu()
-        x = torch.distributions.MultivariateNormal(
-            mean, torch.diag(stdev**2)).sample([inputs.shape[0]])
-        hmc_mean = inputs.mean(0)
-        f, ax = plt.subplots(1, 1, figsize=(10, 10))
-        ax.scatter(inputs[:, 0], inputs[:, 1], s=5, alpha=.4, color='m', label='HMC')
-        ax.scatter(x[:, 0], x[:, 1], s=5, alpha=.4, color='b', label='True Samples')
-        ax.scatter(hmc_mean[0], hmc_mean[1], marker='*', color='g', s=100, label='HMC Mean')
-        ax.scatter(mean[0], mean[1], marker='*', color='C3', s=100, label='True Mean')
-        ax.legend(fontsize=17)
-        ax.grid()
-        ax.set_ylim([-5, 5])
-        ax.set_xlim([-5, 5])
-        plt.savefig('hmc_fit_1d.png')
-        # plt.show()
-        plt.close('all')
 
     def test_1dGaussian_hmc(self):
         """
@@ -106,7 +109,7 @@ class HMCTest(alf.test.TestCase):
         def _test():
             samples = algorithm.sample(params, num_samples)
             return samples
-        #samples = _test()
+        samples = _test()
         samples = torch.cat(samples).reshape(len(samples),-1)
         self.plot_hmc_1d(samples.cpu().numpy())
 
@@ -119,123 +122,12 @@ class HMCTest(alf.test.TestCase):
         self.assertTensorClose(sample_mean, true_mean, .1)
         self.assertTensorClose(sample_std, true_std, .3)
     
-    def log_prob_mog2(self, data):
-        if data.dim() > 1:
-            raise ValueError('data has more than 1 dimension')
-        loc = torch.tensor([[-2.5, 0.0], [2.5, 0.0]])
-        cov = torch.tensor([0.5, 0.5]).diag().unsqueeze(0).repeat(2, 1, 1)
-        mix = torch.distributions.Categorical(torch.ones(2,))
-        comp = torch.distributions.MultivariateNormal(loc, cov)
-        mog_dist = torch.distributions.MixtureSameFamily(mix, comp)
-        logp = mog_dist.log_prob(data)
-        return logp
-
-    def plot_hmc_mog2(self, inputs):
-        loc = torch.tensor([[-2.5, 0.0], [2.5, 0.0]])
-        cov = torch.tensor([0.5, 0.5]).diag().unsqueeze(0).repeat(2, 1, 1)
-        mix = torch.distributions.Categorical(torch.ones(2,))
-        comp = torch.distributions.MultivariateNormal(loc, cov)
-        mog = torch.distributions.MixtureSameFamily(mix, comp)
-
-        samples = mog.sample([len(inputs)]).cpu().numpy()
-        loc1, loc2 = mog.component_distribution.mean.cpu().numpy()
-        
-        pmean = inputs.mean(0)
-        f, ax = plt.subplots(1, 1, figsize=(10, 10))
-        ax.scatter(inputs[:, 0], inputs[:, 1], color='m', marker='o', s=5, alpha=.4, label='HMC')
-        ax.scatter(samples[:, 0], samples[:, 1], s=5, alpha=.4, color='b', label='True Samples')
-        
-        ax.scatter(pmean[0], pmean[1], marker='*',color='g',s=100,label='HMC Mean')
-        ax.scatter(loc1[0], loc1[1], marker='*',color='C3',s=100,label='True Mean')
-        ax.scatter(loc2[0], loc2[1], marker='*',color='C3',s=100,label='True Mean')
-        ax.legend(fontsize=17)
-        ax.grid()
-        ax.set_ylim([-9, 9])
-        ax.set_xlim([-5, 5])
-        plt.savefig('hmc_fit_mog.png')
-        # plt.show()
-        plt.close('all')
-
-    def test_MixtureGaussian_hmc(self):
-        """
-        Using a the log probability function defined above. We want to use this
-        to train an HMC chain that evolves towards fitting the target mixture 
-        distribution. 
-        A Gaussian mixture model with N compnents, has a posterior distribution
-        that is also a mixture model, distributed according to:
-        p(\theta|x) = \sum^N_{i=1} \phi_i(x) N(\mu_i, \sigma_i), where \phi is 
-        a categorical "indexing" distribution. 
-        """
-        print ('HMC: Fitting Mixture of 2 Gaussians')
-        num_samples = 1000
-        step_size = 1.0
-        num_steps_per_sample = 25
-        params = torch.zeros(2)
-        burn_in_steps = 0
-        inv_mass = None
-        algorithm = HMC(
-            self.log_prob_mog2,
-            params,
-            num_samples=num_samples,
-            steps_per_sample=num_steps_per_sample,
-            step_size=step_size,
-            burn_in_steps=burn_in_steps,
-            inv_mass=inv_mass,
-            name='HMCTestMoG')
-        
-        def _test():
-            samples = algorithm.sample(params, num_samples)
-            return samples
-        #samples = _test()
-        samples = torch.cat(samples).reshape(len(samples),-1)
-
-        lside_samples = torch.stack([x for x in samples if x[0] < 0])
-        rside_samples = torch.stack([x for x in samples if x[0] >= 0])
-
-        lside_mean = lside_samples.mean(0)
-        rside_mean = rside_samples.mean(0)
-        lside_std = lside_samples.std(0)
-        rside_std = rside_samples.std(0)
-        true_lmean = torch.tensor([-2.5, 0.])
-        true_lstd = torch.tensor([0.5, .5])
-        true_rmean = torch.tensor([2.5, 0.])
-        true_rstd = torch.tensor([0.5, .5])
-        
-        self.plot_hmc_mog2(samples.cpu().numpy())
-        
-        # for speed. higher ``num_samples`` results in tighter fit
-        self.assertTensorClose(lside_mean, true_lmean, .1)
-        self.assertTensorClose(rside_mean, true_rmean, .1)
-        self.assertTensorClose(lside_std, true_lstd, .3)
-        self.assertTensorClose(rside_std, true_rstd, .3)
- 
-
     def log_prob_funnel(self, data):
         v_dist = torch.distributions.Normal(0, 3)
         logp = v_dist.log_prob(data[0])
         x_dist = torch.distributions.Normal(0, torch.exp(-data[0])**.5)
         logp += x_dist.log_prob(data[1:]).sum()
         return logp
-
-    def plot_hmc_funnel(self, inputs):
-        y_dist = torch.distributions.Normal(0, 3)
-        y_samples = y_dist.sample([1000]).cpu()
-        x_dist = torch.distributions.Normal(0, torch.exp(-y_samples)**.5)
-        x_samples = x_dist.sample().cpu()
-        hmc_mean = inputs.mean(0)
-        
-        f, ax = plt.subplots(1, 1, figsize=(10, 10))
-        ax.scatter(inputs[:, 1], inputs[:, 0], s=5, color='m', alpha=.4, label='HMC')
-        ax.scatter(x_samples.cpu(), y_samples.cpu(), s=5, alpha=.4, color='b', label='True Samples')
-        ax.scatter(hmc_mean[1], hmc_mean[0], marker='o', color='g', s=200, label='HMC Mean')
-        ax.scatter(x_samples.mean(), y_samples.mean(), marker='*', color='C3', s=200, label='True Mean')
-        ax.legend(fontsize=17)
-        ax.grid()
-        ax.set_ylim([0, 7])
-        ax.set_xlim([-4, 4])
-        plt.savefig('hmc_fit_funnel.png')
-        # plt.show()
-        plt.close('all')
 
     def test_funnel_hmc(self):
         """
@@ -265,7 +157,7 @@ class HMCTest(alf.test.TestCase):
 
         def _test():
             return algorithm.sample(params, num_samples)
-        #samples = _test()
+        samples = _test()
         samples = torch.cat(samples).reshape(len(samples),-1)
         self.plot_hmc_funnel(samples.cpu().numpy())
 
@@ -279,50 +171,64 @@ class HMCTest(alf.test.TestCase):
             self.assertTensorClose(sample_std, pv_std, .8)
         
         
-    def get_data(self, n_train, n_test):
-        x_train = torch.linspace(-np.pi, np.pi, n_train).view(-1, 1)
-        y_train = torch.sin(x_train).view(-1, 1) + torch.randn_like(x_train)*0.1
+    def generate_regression_data(self, n_train, n_test):
+        x_train1 = torch.linspace(-6, -2, n_train//2).view(-1, 1)
+        x_train2 = torch.linspace(2, 6, n_train//2).view(-1, 1)
+        x_train3 = torch.linspace(-2, 2, 4).view(-1, 1)
+        x_train = torch.cat((x_train1, x_train2, x_train3), dim=0)
+        y_train = -(1 + x_train) * torch.sin(1.2*x_train) 
+        y_train = y_train + torch.ones_like(y_train).normal_(0, 0.04)
 
-        x_test = torch.linspace(-5, 5, n_test).view(-1, 1)
-        y_test = torch.sin(x_test).view(-1, 1)
+        x_test = torch.linspace(-6, 6, n_test).view(-1, 1)
+        y_test = -(1 + x_test) * torch.sin(1.2*x_test) 
+        y_test = y_test + torch.ones_like(y_test).normal_(0, 0.04)
         return (x_train, y_train), (x_test, y_test)
     
-    def plot_bnn_regression(self, bnn_preds):
-        (x_train, y_train), (x_test, y_test) = self.get_data(6, 300)
+    def plot_bnn_regression(self, bnn_preds, data):
+        gt_x = torch.linspace(-6, 6, 500).view(-1, 1).cpu()
+        gt_y = -(1+gt_x) * torch.sin(1.2*gt_x) 
+        gt_y += torch.ones_like(gt_x).normal_(0, 0.04).cpu()
+        (x_train, y_train), (x_test, y_test) = data
         x_test = x_test.cpu().numpy()
         x_train = x_train.cpu().numpy()
         bnn_preds = bnn_preds.cpu()
         print (x_test.shape, bnn_preds.shape)
         plt.plot(x_test, bnn_preds[:].numpy().squeeze().T,
             'C0',alpha=0.01)
-        plt.plot(x_test, bnn_preds.mean(0).squeeze().T, 'C1',alpha=0.9)
+        plt.plot(x_test, bnn_preds.mean(0).squeeze().T, color='b',
+            label='posterior mean', alpha=0.9)
         plt.plot(x_test,
-            bnn_preds.mean(0).squeeze().T+bnn_preds.std(0).squeeze().T,
-            'C1',alpha=0.8,linewidth=3)
+            bnn_preds.mean(0).squeeze().T+2*bnn_preds.std(0).squeeze().T,
+            'C1',alpha=0.8, linewidth=3)
         plt.plot(x_test,
-            bnn_preds.mean(0).squeeze().T-bnn_preds.std(0).squeeze().T,
+            bnn_preds.mean(0).squeeze().T-2*bnn_preds.std(0).squeeze().T,
             'C1',alpha=0.8,linewidth=3)
-        plt.plot(x_train, y_train.cpu().numpy(),'.C3',markersize=30,
-            label='x train',alpha=0.6)
-        plt.legend(fontsize=20)
-        plt.ylim([-5, 5])
-        plt.savefig('hmc_bnn.png')
+        plt.scatter(x_train, y_train.cpu().numpy(),color='g', label='train pts',
+            alpha=0.6)
+        plt.plot(gt_x, gt_y, color='r', label='ground truth')
+        plt.legend(fontsize=14, loc='best')
+        plt.ylim([-6, 8])
+        plt.savefig('plots/hmc_bnn.png')
+        plt.close('all')
 
     def test_BayesianNNRegression(self):
-        n_train = 6
-        n_test = 300
-        train_samples, test_samples = self.get_data(n_train, n_test)
-        net = BNN([1, 10, 10, 1])
-        params_init = torch.cat([p.flatten() for p in net.parameters()]).clone()
+        n_train = 80
+        n_test = 200
+        train_samples, test_samples = self.generate_regression_data(
+            n_train, n_test)
+        net = BNN3([1, 50, 1])
+        params_init = torch.cat([
+            p.flatten() for p in net.parameters()]).clone()
         tau_list = []
-        tau = 0.1
+        tau = .1
         for p in net.parameters():
             tau_list.append(tau)
         tau_list = torch.tensor(tau_list)
-        step_size = 0.012
-        num_samples = 500
-        steps_per_sample = 10
-        tau_out = 100.
+        step_size = 0.002
+        num_samples = 10000
+        burn_in_steps= 9800
+        steps_per_sample = 25
+        tau_out = .1
         print ('HMC: Fitting BNN to regression data')
         algorithm = HMC(
             params=params_init,
@@ -330,6 +236,7 @@ class HMCTest(alf.test.TestCase):
             steps_per_sample=steps_per_sample,
             step_size=step_size,
             model=net,
+            burn_in_steps=burn_in_steps,
             model_loss='regression',
             tau_list=tau_list,
             tau_out=tau_out)
@@ -349,16 +256,13 @@ class HMCTest(alf.test.TestCase):
                 ((preds.mean(0) - test_labels)**2).mean()))
             return preds
 
-        #hmc_params = _train()
-        #bnn_preds = _test(hmc_params)
-        self.plot_bnn_regression(bnn_preds)
+        hmc_params = _train()
+        bnn_preds = _test(hmc_params)
+        self.plot_bnn_regression(bnn_preds, (train_samples, test_samples))
     
     def generate_class_data(self,
         n_samples=100,
         means=[(2., 2.), (-2., 2.), (2., -2.), (-2., -2.)]):
-        #means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
-        #means=[(2., 2.), (-2., -2.)]):
-
         data = torch.zeros(n_samples, 2)
         labels = torch.zeros(n_samples)
         size = n_samples//len(means)
@@ -370,6 +274,7 @@ class HMCTest(alf.test.TestCase):
        
         plt.scatter(data[:, 0].cpu(), data[:, 1].cpu())
         plt.savefig('data_space.png')
+        plt.close('all')
         return data, labels.long()
     
     def plot_bnn_classification(self, i, algorithm, samples, conf_style='mean',
@@ -392,31 +297,32 @@ class HMCTest(alf.test.TestCase):
             conf_outputs = mean_outputs.min(-1)[0]
         elif conf_style == 'entropy':
             conf_outputs = entropy(mean_outputs.T.numpy())
+        
         conf_mean = mean_outputs.mean(-1)
         conf_std = std_outputs.max(-1)[0] * 1.96
         labels = mean_outputs.argmax(-1)
         data, _ = self.generate_class_data(n_samples=400) 
+        
         p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs, cmap='rainbow')
         p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("{} confidance".format(conf_style))
-        plt.savefig('hmc_plots/conf_map{}-{}_{}.png'.format(i, conf_style, tag))
+        plt.savefig('plots/conf_map{}-{}_{}.png'.format(i, conf_style, tag))
         plt.close('all')
 
         p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std, cmap='rainbow')
         p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("confidance (std)")
-        plt.savefig('hmc_plots/conf_map{}-std_{}.png'.format(tag, i))
+        plt.savefig('plots/conf_map{}-std_{}.png'.format(tag, i))
         plt.close('all')
         
         p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels, cmap='rainbow')
         p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("predicted labels")
-        plt.savefig('hmc_plots/conf_map{}-labels_{}.png'.format(tag, i))
+        plt.savefig('plots/conf_map{}-labels_{}.png'.format(tag, i))
         plt.close('all')
-
 
     def test_BayesianNNClassification(self):
         n_train = 100
@@ -433,8 +339,8 @@ class HMCTest(alf.test.TestCase):
         num_samples = 10000
         steps_per_sample = 25
         tau_out = 1.
-        burn_in_steps= 9000
-        print ('HMC: Fitting BNN to regression data')
+        burn_in_steps= 9800
+        print ('HMC: Fitting BNN to classification data')
         algorithm = HMC(
             params=params_init,
             num_samples=num_samples,
@@ -459,13 +365,132 @@ class HMCTest(alf.test.TestCase):
             print ('Expected XE loss: {}'.format(
                 F.cross_entropy(preds.mean(0), test_labels).mean()))
             return preds
-
+        
         hmc_params = _train()
+        from sklearn.manifold import MDS
+        mds = MDS(n_components=2)
+        _params = torch.stack(hmc_params).detach().cpu().numpy()
+        _parmas = _params[::25]
+        print (_params.shape)
+        mds.fit(_params)
+        X = mds.fit_transform(_params)
+        plt.scatter(X[:, 0], X[:, 1], label='mds points')
+        plt.savefig('plots/mds_plot_hmc_small.png')
+        plt.close('all')
         bnn_preds = _test(hmc_params)
         with torch.no_grad():
             self.plot_bnn_classification(num_samples, algorithm, hmc_params,
             'entropy', 'hmc_4means_l50_cmap')
+        
+    def cov(self, data, rowvar=False):
+        """Estimate a covariance matrix given data.
 
-   
+        Args:
+            data (tensor): A 1-D or 2-D tensor containing multiple observations 
+                of multiple dimentions. Each row of ``mat`` represents a
+                dimension of the observation, and each column a single
+                observation.
+            rowvar (bool): If True, then each row represents a dimension, with
+                observations in the columns. Othewise, each column represents
+                a dimension while the rows contains observations.
+
+        Returns:
+            The covariance matrix
+        """
+        x = data.detach().clone()
+        if x.dim() > 2:
+            raise ValueError('data has more than 2 dimensions')
+        if x.dim() < 2:
+            x = x.view(1, -1)
+        if not rowvar and x.size(0) != 1:
+            x = x.t()
+        fact = 1.0 / (x.size(1) - 1)
+        x -= torch.mean(x, dim=1, keepdim=True)
+        return fact * x.matmul(x.t()).squeeze()
+
+    def assertArrayGreater(self, x, y, eps):
+        self.assertEqual(x.shape, y.shape)
+        self.assertGreater(float(torch.min(x - y)), eps)
+
+    def test_bayesian_linear_regression(self):
+        """
+        HMC is used to sample the parameter vector for a linear
+        regressor. The target linear regressor is :math:`y = X\beta + e`, where 
+        :math:`e\sim N(0, I)` is random noise, :math:`X` is the input data matrix, 
+        and :math:`y` is target ouputs. The posterior of :math:`\beta` has a 
+        closed-form :math:`p(\beta|X,y)\sim N((X^TX)^{-1}X^Ty, X^TX)`.
+        For a linear model with weight W and bias b, and standard Gaussian prior,
+        the output follows a Gaussian :math:`N(b, WW^T)`, which should 
+        match the posterior :math:`p(\beta|X,y)`.
+        """
+        input_size = 3
+        input_spec = TensorSpec((input_size, ), torch.float32)
+        output_dim = 1
+        batch_size = 100
+        inputs = input_spec.randn(outer_dims=(batch_size, ))
+        beta = torch.rand(input_size, output_dim) + 5.
+        print("beta: {}".format(beta))
+        noise = torch.randn(batch_size, output_dim)
+        targets = inputs @ beta + noise
+        true_cov = torch.inverse(
+            inputs.t() @ inputs) 
+        true_mean = true_cov @ inputs.t() @ targets
+        net = BNN2([input_size, output_dim])
+        params_init = torch.cat([p.flatten() for p in net.parameters()]).clone()
+        tau_list = []
+        tau = 1.
+        for p in net.parameters():
+            tau_list.append(tau)
+        tau_list = torch.tensor(tau_list)
+        step_size = .005
+        num_samples = 6000
+        steps_per_sample = 50
+        tau_out = 1.
+        burn_in_steps= 5800
+        print ('HMC: Fitting BNN to classification data')
+        algorithm = HMC(
+            params=params_init,
+            num_samples=num_samples,
+            steps_per_sample=steps_per_sample,
+            step_size=step_size,
+            burn_in_steps=burn_in_steps,
+            model=net,
+            model_loss='regression',
+            tau_list=tau_list,
+            tau_out=tau_out)
+
+        def _train():
+            params_hmc = algorithm.sample_model(inputs, targets)
+            return params_hmc
+
+        def _test(params):
+            print("-" * 68)
+            preds, log_probs = algorithm.predict_model(inputs, targets,
+                samples=params)
+            params = torch.stack(params)
+            computed_mean = params.mean(0)
+            computed_cov = self.cov(params)
+            print("-" * 68)
+            spred_err = torch.norm((preds - targets).mean(1))
+            print("sampled pred err: ", spred_err)
+
+            smean_err = torch.norm(computed_mean - true_mean.squeeze())
+            smean_err = smean_err / torch.norm(true_mean)
+            print("sampled mean err: ", smean_err)
+
+            computed_cov = self.cov(params)
+            scov_err = torch.norm(computed_cov - true_cov)
+            scov_err = scov_err / torch.norm(true_cov)
+            print("sampled cov err: ", scov_err)
+            
+            self.assertLess(smean_err, .5)
+            self.assertLess(scov_err, .5)
+
+        params_hmc = _train()
+        _test(params_hmc)
+
+        print("ground truth mean: {}".format(true_mean))
+        print("ground truth cov norm: {}".format(true_cov.norm()))
+
 if __name__ == "__main__":
     alf.test.main()

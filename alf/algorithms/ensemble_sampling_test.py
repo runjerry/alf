@@ -19,7 +19,7 @@ import torch.nn.functional as F
 
 import alf
 from alf.algorithms.config import TrainerConfig
-from alf.algorithms.forward_network_algorithm import ForwardNetwork
+from alf.algorithms.sl_algorithm import SLAlgorithm
 from alf.tensor_specs import TensorSpec
 from alf.utils import math_ops
 
@@ -27,7 +27,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from scipy.stats import entropy
-
+import os
 
 class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
     """ 
@@ -100,12 +100,12 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         batch_size = 100
         input_spec = TensorSpec((input_size, ), torch.float32)
         train_batch_size = 50
-        algorithm = ForwardNetwork(
+        algorithm = SLAlgorithm(
             input_spec,
             fc_layer_params=((50, True),(50, True),),
             last_layer_param=(output_dim, False),
             last_activation=math_ops.identity,
-            ensemble_size=10,
+            predictor_size=10,
             loss_type='regression',
             optimizer=alf.optimizers.Adam(1e-4))
 
@@ -175,28 +175,29 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
     
     def generate_data(self,
         n_samples=100,
-        means=[(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)]):
+        means=[(2., 2.), (-2., 2.), (2., -2.), (-2., -2.)]):
         data = torch.zeros(n_samples, 2)
         labels = torch.zeros(n_samples)
         size = n_samples//len(means)
         for i, (x, y) in enumerate(means):
-            dist = torch.distributions.Normal(torch.tensor([x, y]), .1)
+            dist = torch.distributions.Normal(torch.tensor([x, y]), .3)
             samples = dist.sample([size])
             data[size*i:size*(i+1)] = samples
             labels[size*i:size*(i+1)] = torch.ones(len(samples)) * i
         
         return data, labels.long()
     
-    def plot_classification(self, algorithm, conf_style='mean', tag=''):
-        #plt.style.use('classic')
-        x = torch.linspace(-5, 5, 500)
-        y = torch.linspace(-5, 5, 500)
+    def plot_classification(self, i, algorithm, conf_style='mean', tag=''):
+        os.makedirs('plots/{}'.format(tag), exist_ok=True)
+        basedir = 'plots/{}'.format(tag)
+        x = torch.linspace(-10, 10, 100)
+        y = torch.linspace(-10, 10, 100)
         gridx, gridy = torch.meshgrid(x, y)
         grid = torch.stack((gridx.reshape(-1), gridy.reshape(-1)), -1)
 
-        #grid, _ = self.generate_data(n_samples=20)
         outputs, _ = algorithm._net(grid)  # [B, N, D]
         mean_outputs = F.softmax(outputs, -1).mean(1).detach().cpu()  # [B, D]
+        std_outputs = F.softmax(outputs, -1).std(1).detach().cpu()  # [B, D]
         if conf_style == 'mean':
             conf_outputs = mean_outputs.mean(-1)
         elif conf_style == 'max':
@@ -205,28 +206,29 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
             conf_outputs = mean_outputs.min(-1)[0]
         elif conf_style == 'entropy':
             conf_outputs = entropy(mean_outputs.T.numpy())
-        conf_std = mean_outputs.std(-1)
+        conf_mean = mean_outputs.mean(-1)
+        conf_std = std_outputs.max(-1)[0]
         labels = mean_outputs.argmax(-1)
         data, _ = self.generate_data(n_samples=400) 
-        plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs, cmap='jet')
-        plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
-        cbar = plt.colorbar(cmap='jet')
-        cbar.set_label("{} confidance".format(conf_style))
-        plt.savefig('conf_map-{}_{}.png'.format(conf_style, tag))
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs, cmap='rainbow')
+        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        cbar = plt.colorbar(p1)
+        cbar.set_label("{}".format(conf_style))
+        plt.savefig(basedir+'/conf_map-{}_{}.png'.format(conf_style, i))
         plt.close('all')
 
-        plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std, cmap='jet')
-        plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
-        cbar = plt.colorbar(cmap='jet')
-        cbar.set_label("confidance std")
-        plt.savefig('conf_map-std_{}.png'.format(tag))
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std, cmap='rainbow')
+        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        cbar = plt.colorbar(p1)
+        cbar.set_label("confidance (std)")
+        plt.savefig(basedir+'/conf_map-std_{}.png'.format(i))
         plt.close('all')
         
-        plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels, cmap='jet')
-        plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
-        cbar = plt.colorbar(cmap='jet')
-        cbar.set_label("map labels")
-        plt.savefig('conf_map-labels_{}.png'.format(tag))
+        p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels, cmap='rainbow')
+        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        cbar = plt.colorbar(p1)
+        cbar.set_label("predicted labels")
+        plt.savefig(basedir+'/conf_map-labels_{}.png'.format(i))
         plt.close('all')
 
     def test_classification_ensemble(self):
@@ -245,26 +247,27 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         output_dim = 4
         batch_size = 100
         input_spec = TensorSpec((input_size, ), torch.float32)
-        train_batch_size = 50
+        train_batch_size = 100
+        n_members = 100
         
-        inputs, targets = self.generate_data(n_samples=400)
-        test_inputs, test_targets = self.generate_data(n_samples=100)
-        algorithm = ForwardNetwork(
+        inputs, targets = self.generate_data(n_samples=100)
+        test_inputs, test_targets = self.generate_data(n_samples=20)
+        algorithm = SLAlgorithm(
             input_spec,
-            fc_layer_params=(50, 50,),
+            fc_layer_params=(10, 10,),
             last_layer_param=(output_dim, False),
             last_activation=math_ops.identity,
-            ensemble_size=10,
+            predictor_size=n_members,
+            predictor_vote='soft',
+            use_fc_bn=False,
             loss_type='classification',
             optimizer=alf.optimizers.Adam(1e-4))
 
-        def _train(entropy_regularization=None):
-            perm = torch.randperm(400)
+        def _train():
+            perm = torch.randperm(100)
             idx = perm[:train_batch_size]
             train_inputs = inputs[idx]
             train_targets = targets[idx]
-            if entropy_regularization is None:
-                entropy_regularization = train_batch_size / batch_size
             alg_step = algorithm.train_step(
                 inputs=(train_inputs, train_targets),
                 state=())
@@ -274,21 +277,36 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         def _test(i):
             outputs, _ = algorithm._net(test_inputs)
             probs = F.softmax(outputs, dim=-1)
+            print (probs.shape)
             preds = probs.mean(1).cpu().argmax(-1)
+            print (preds.shape, test_targets.shape)
             mean_acc = preds.eq(test_targets.cpu().view_as(preds)).float()
             mean_acc = mean_acc.sum() / len(test_targets)
             
             sample_preds = probs.cpu().argmax(-1).reshape(-1, 1)
             targets_unrolled = test_targets.unsqueeze(1).repeat(
-                1, 10).reshape(-1, 1)
+                1, n_members).reshape(-1, 1)
             sample_acc = sample_preds.eq(targets_unrolled.cpu().view_as(sample_preds)).float()
             sample_acc = sample_acc.sum()/len(targets_unrolled)
 
+            import umap
+            _params_lst = list(algorithm._net.parameters())
+            _params = []
+            for entry in _params_lst:
+                flat_entry = entry.view(n_members, -1)
+                _params.append(flat_entry)
+            _params = torch.cat(_params, dim=-1).detach().cpu().numpy()
+            print (_params.shape)
+            trans = umap.UMAP(n_neighbors=5, random_state=42).fit(_params)
+            X = trans.embedding_
+            plt.scatter(X[:, 0], X[:, 1], label='umap embedding')
+            plt.savefig('plots/umap_ensemble_params')
+            plt.close('all')
             print("-" * 68)
             print ('iter ', i)
             print ('Mean Acc: ', mean_acc.item())
             print ('Sample Acc: ', sample_acc.item())
-            self.plot_classification(algorithm, 'entropy', 'ensemble')
+            self.plot_classification(i, algorithm, 'entropy', 'ensemble')
             return sample_preds, targets_unrolled
 
         train_iter = 4000

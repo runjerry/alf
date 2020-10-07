@@ -1,0 +1,37 @@
+import alf.algorithms.sl_algorithm
+
+# dataset config
+create_dataset.dataset_name='mnist'
+create_dataset.train_batch_size=50
+create_dataset.test_batch_size=100
+
+# Lenet for MNIST
+CONV_LAYER_PARAMS=((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
+FC_LAYER_PARAMS = (84, )
+
+ensemblenet/Adam.lr=1e-3
+ensemblenet/Adam.weight_decay=1e-4
+
+# algorithm config
+SLAlgorithm.conv_layer_params=%CONV_LAYER_PARAMS
+SLAlgorithm.fc_layer_params=%FC_LAYER_PARAMS
+SLAlgorithm.use_fc_bn=False
+SLAlgorithm.predictor_vote='soft'
+SLAlgorithm.predictor_size=10
+
+SLAlgorithm.loss_type = 'classification'
+SLAlgorithm.optimizer=@ensemblenet/Adam()
+SLAlgorithm.logging_training=True
+SLAlgorithm.logging_evaluate=True
+
+# training config
+TrainerConfig.algorithm_ctor=@SLAlgorithm
+TrainerConfig.num_epochs=1000
+TrainerConfig.num_checkpoints=2
+TrainerConfig.evaluate=True
+TrainerConfig.eval_uncertainty=1
+TrainerConfig.eval_interval=1
+TrainerConfig.summary_interval=1
+TrainerConfig.debug_summaries=True
+TrainerConfig.summarize_grads_and_vars=True
+

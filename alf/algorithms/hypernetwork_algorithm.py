@@ -93,10 +93,10 @@ class HyperNetwork(Algorithm):
                  voting="soft",
                  par_vi="svgd",
                  function_vi=False,
-                 function_bs=None,
                  optimizer=None,
                  critic_optimizer=None,
                  critic_hidden_layers=(100, 100),
+                 function_bs=None,
                  logging_network=False,
                  logging_training=False,
                  logging_evaluate=False,
@@ -141,8 +141,8 @@ class HyperNetwork(Algorithm):
             critic_optimizer (torch.optim.Optimizer): the optimizer for training critic.
             critic_hidden_layers (tuple): sizes of critic hidden layeres. 
             function_bs (int): mini batch size for par_vi training. 
-            Needed for critic initialization when function_vi is True. 
-                                                                                        
+                Needed for critic initialization when function_vi is True. 
+
             Args for training and testing
             ====================================================================
             loss_type (str): loglikelihood type for the generated functions,
@@ -151,8 +151,8 @@ class HyperNetwork(Algorithm):
                 types are [``soft``, ``hard``]
             par_vi (str): types of particle-based methods for variational inference,
                 types are [``svgd``, ``svgd2``, ``svgd3``, ``gfsf``]
-            function_vi (str): whether to use funciton value based par_vi.
-            optimizer (torch.optim.Optimizer): The optimizer for training.
+            function_vi (bool): whether to use funciton value based par_vi.
+            optimizer (torch.optim.Optimizer): The optimizer for training generator.
             logging_network (bool): whether logging the archetectures of networks.
             logging_training (bool): whether logging loss and acc during training.
             logging_evaluate (bool): whether logging loss and acc of evaluate.
@@ -355,7 +355,6 @@ class HyperNetwork(Algorithm):
             num_particles = self._num_particles
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
-
         if self._function_vi:
             data, target = inputs
             return self._generator.train_step(
@@ -417,11 +416,11 @@ class HyperNetwork(Algorithm):
         """
         Function computing negative log_prob loss for generator outputs.
         Used when function_vi is False.
-        
+
         Args:
             inputs (torch.Tensor): (data, target) of training batch.
             params (torch.Tensor): generator outputs to evaluate the loss.
-        
+
         Returns:
             negative log_prob for params evaluated on current training batch.
         """
