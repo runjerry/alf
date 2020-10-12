@@ -116,3 +116,27 @@ venv.bak/
 
 # .DS_Store
 *.DS_Store
+
+# Neale's ignores
+plots/
+
+
+minmax_runs_2cls/
+svgd_runs_2cls/
+gfsf_runs_2cls/
+
+minmax_runs_2cls3/
+svgd_runs_2cls3/
+gfsf_runs_2cls3/
+
+hmc_runs_2cls21/
+minmax_runs_2cls21/
+svgd_runs_2cls21/
+gfsf_runs_2cls21/
+
+minmax_runs_4cls/
+svgd_runs_4cls/
+gfsf_runs_4cls/
+hmc_runs/
+
+
