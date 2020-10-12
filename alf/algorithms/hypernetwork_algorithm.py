@@ -97,6 +97,8 @@ class HyperNetwork(Algorithm):
                  critic_optimizer=None,
                  critic_hidden_layers=(100, 100),
                  function_bs=None,
+                 function_extra_bs_ratio=None,
+                 function_extra_bs_sampler='uniform',
                  logging_network=False,
                  logging_training=False,
                  logging_evaluate=False,
@@ -194,7 +196,11 @@ class HyperNetwork(Algorithm):
         if function_vi:
             assert function_bs is not None, (
                 "need to specify batch_size of function outputs.")
-            critic_input_dim = function_bs * last_layer_param[0]
+            self._function_extra_bs = int(
+                function_bs * function_extra_bs_ratio)
+            self._function_extra_bs_sampler = function_extra_bs_sampler
+            critic_input_dim = (
+                function_bs + self._function_extra_bs) * last_layer_param[0]
         else:
             critic_input_dim = gen_output_dim
 
@@ -394,7 +400,19 @@ class HyperNetwork(Algorithm):
         outputs = outputs.transpose(0, 1)
         outputs = outputs.view(num_particles, -1)  # [P, B * D]
 
-        return outputs
+        # sample perturbed data
+        sample = data[-self._function_extra_bs:]
+        noise = torch.zeros_like(sample)
+        if self._function_extra_bs_sampler == 'uniform':
+            noise.uniform_(0., 1.)
+        else:
+            noise.normal_(mean=0., std=self._function_extra_bs_std)
+        perturbed_samples = sample + noise
+        density_outputs, _ = self._param_net(perturbed_samples)
+        density_outputs = density_outputs.transpose(0, 1)
+        density_outputs = density_outputs.view(num_particles, -1)
+
+        return outputs, density_outputs
 
     def _function_neglogprob(self, targets, outputs):
         """

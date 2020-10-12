@@ -97,7 +97,11 @@ class ReluMLP(Network):
         last_fc = SimpleFC(input_size, self._output_size, activation=identity)
         self._fc_layers.append(last_fc)
 
-    def forward(self, inputs, state=(), requires_jac_diag=False):
+    def forward(self,
+                inputs,
+                state=(),
+                requires_jac=False,
+                requires_jac_diag=False):
         """
         Args:
             inputs (torch.Tensor)
@@ -111,10 +115,35 @@ class ReluMLP(Network):
         z = inputs
         for fc in self._fc_layers:
             z = fc(z)
-        if requires_jac_diag:
+        if requires_jac:
+            z = (z, self._compute_jac())
+        elif requires_jac_diag:
             z = (z, self._compute_jac_diag())
 
         return z, state
+
+    def compute_jac(self, inputs):
+        """Compute the input-output Jacobian. """
+
+        inputs = inputs.squeeze()
+        assert inputs.shape[-1] == self._input_size, \
+            ("inputs should has shape {}!".format(self._input_size))
+
+        self.forward(inputs)
+
+        return self._compute_jac()
+
+    def _compute_jac(self):
+        """Compute the input-output Jacobian. """
+
+        mask = (self._fc_layers[-2].hidden_neurons > 0).float()
+        J = torch.einsum('ia,ba,aj->bij', self._fc_layers[-1].weight, mask,
+                         self._fc_layers[-2].weight)
+        for fc in reversed(self._fc_layers[0:-2]):
+            mask = (fc.hidden_neurons > 0).float()
+            J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
+
+        return J
 
     def compute_jac_diag(self, inputs):
         """Compute diagonals of the input-output Jacobian. """

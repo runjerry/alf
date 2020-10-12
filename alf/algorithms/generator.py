@@ -624,16 +624,21 @@ class Generator(Algorithm):
         """Compute particle gradients via GFSF (Stein estimator). """
         assert inputs is None, '"gfsf" does not support conditional generator'
         if transform_func is not None:
-            outputs = transform_func(outputs)
-        loss_inputs = outputs
+            outputs, extra_outputs = transform_func(outputs)
+            score_inputs = torch.cat([outputs, extra_outputs], dim=-1).detach()
+        else:
+            score_inputs = outputs.detach()
+        loss_inputs = outputs.detach().copy()
+        loss_inputs.requires_grad = True
         loss = loss_func(loss_inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss
         else:
             neglogp = loss
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
+        loss_grad = torch.autograd.grad(neglogp.sum(),
+                                        loss_inputs)[0]  # [N2, D]
 
-        logq_grad = self._score_func(outputs)
+        logq_grad = self._score_func(score_inputs)
         grad = loss_grad + entropy_regularization * logq_grad
         loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
