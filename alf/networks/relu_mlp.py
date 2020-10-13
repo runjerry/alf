@@ -64,6 +64,7 @@ class ReluMLP(Network):
 
     def __init__(self,
                  input_tensor_spec,
+                 output_size=None,
                  hidden_layers=(64, 64),
                  activation=torch.relu_,
                  name="ReluMLP"):
@@ -83,7 +84,9 @@ class ReluMLP(Network):
         super().__init__(input_tensor_spec, name=name)
 
         self._input_size = input_tensor_spec.shape[0]
-        self._output_size = self._input_size
+        self._output_size = output_size
+        if self._output_size is None:
+            self._output_size = self._input_size
         self._hidden_layers = hidden_layers
         self._n_hidden_layers = len(hidden_layers)
 
@@ -143,7 +146,7 @@ class ReluMLP(Network):
             mask = (fc.hidden_neurons > 0).float()
             J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
 
-        return J
+        return J  # [B, n_out, n_in]
 
     def compute_jac_diag(self, inputs):
         """Compute diagonals of the input-output Jacobian. """

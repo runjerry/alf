@@ -54,7 +54,7 @@ class ReluMLPTest(parameterized.TestCase, alf.test.TestCase):
         """
         batch_size = 2
         spec = TensorSpec((input_size, ))
-        mlp = ReluMLP(spec, hidden_layers=hidden_layers)
+        mlp = ReluMLP(spec, output_size=4, hidden_layers=hidden_layers)
 
         # compute jac  using direct approach
         x = torch.randn(batch_size, input_size, requires_grad=True)
