@@ -277,15 +277,26 @@ class ParamNetwork(Network):
                 pos = pos + bias_length
         self._output_spec = None
 
-    def forward(self, inputs, state=()):
-        """
-        Args:
-            inputs (Tensor):
-            state: not used, just keeps the interface same with other networks.
-        """
+    def f(self, inputs, state):
         x = inputs
         if self._conv_net is not None:
             x, state = self._conv_net(x, state=state)
         for fc_l in self._fc_layers:
             x = fc_l(x)
-        return x, state
+        return x
+
+    def forward(self, inputs, requires_jac=False, state=()):
+        """
+        Args:
+            inputs (Tensor):
+            state: not used, just keeps the interface same with other networks.
+        """
+        if requires_jac:
+            jac = torch.autograd.functional.jacobian(self.f, (inputs, state))
+        x = self.f(inputs, state)
+        
+        if requires_jac:
+            return x, jac, state
+        else:
+            return x, state
+

@@ -37,31 +37,12 @@ from alf.utils.summary_utils import record_time
 from alf.algorithms.sl_algorithm import SLAlgorithm
 
 
-HyperNetworkLossInfo = namedtuple("HyperNetworkLossInfo", ["loss", "extra"])
+EnsembleLossInfo = namedtuple("HyperNetworkLossInfo", ["loss", "extra"])
 
 
 @gin.configurable
-class HyperNetwork(SLAlgorithm):
-    """HyperNetwork 
-
-    HyperrNetwork algorithm maintains a generator that generates a set of 
-    parameters for a predefined neural network from a random noise input. 
-    It is based on the following work:
-
-    https://github.com/neale/HyperGAN
-
-    Ratzlaff and Fuxin. "HyperGAN: A Generative Model for Diverse, 
-    Performant Neural Networks." International Conference on Machine Learning. 2019.
-
-    Major differences versus the original paper are:
-
-    * A single genrator that generates parameters for all network layers.
-
-    * Remove the mixer and the distriminator.
-
-    * The generator is trained with Amortized particle-based variational 
-      inference (ParVI) methods, please refer to generator.py for details.
-
+class EnsembleNetwork(SLAlgorithm):
+    """Ensemble
     """
 
     def __init__(self,
@@ -71,19 +52,13 @@ class HyperNetwork(SLAlgorithm):
                  activation=torch.relu_,
                  last_layer_param=None,
                  last_activation=None,
-                 noise_dim=32,
-                 hidden_layers=(64, 64),
                  use_fc_bn=False,
                  num_particles=10,
                  entropy_regularization=1.,
-                 parameterization='layer',
                  loss_type="classification",
                  voting="soft",
                  par_vi="svgd",
-                 amortize_vi=True,
-                 particle_optimizer=None,
                  function_vi=False,
-                 functional_gradient=False,
                  optimizer=None,
                  critic_optimizer=None,
                  critic_hidden_layers=(100, 100),
@@ -95,7 +70,7 @@ class HyperNetwork(SLAlgorithm):
                  logging_training=False,
                  logging_evaluate=False,
                  config: TrainerConfig = None,
-                 name="HyperNetwork"):
+                 name="EnsembleNetwork"):
         """
         Args:
             Args for the generated parametric network
@@ -122,19 +97,6 @@ class HyperNetwork(SLAlgorithm):
                 ``last_layer_param`` is not None, ``last_activation`` has to be
                 specified explicitly.
 
-            Args for the generator
-            ====================================================================
-            noise_dim (int): dimension of noise
-            hidden_layers (tuple): size of hidden layers.
-            use_fc_bn (bool): whether use batnch normalization for fc layers.
-            num_particles (int): number of sampling particles
-            entropy_regularization (float): weight of entropy regularization
-            parameterization (str): choice of parameterization for the
-                hypernetwork. Choices are [``network``, ``layer``].
-                A parameterization of ``network`` uses a single generator to
-                generate all the weights at once. A parameterization of ``layer``
-                uses one generator for each layer of output parameters.
-
             Args for training and testing
             ====================================================================
             loss_type (str): loglikelihood type for the generated functions,
@@ -159,33 +121,6 @@ class HyperNetwork(SLAlgorithm):
             last_activation=last_activation)
 
         gen_output_dim = param_net.param_length
-        noise_spec = TensorSpec(shape=(noise_dim, ))
-        assert parameterization in ['network', 'layer'], "Hypernetwork " \
-                "can only be parameterized by \"network\" or \"layer\" " \
-                "generators"
-        if parameterization == 'network':
-            net = EncodingNetwork(
-                noise_spec,
-                fc_layer_params=hidden_layers,
-                use_fc_bn=use_fc_bn,
-                last_layer_size=gen_output_dim,
-                last_activation=math_ops.identity,
-                name="Generator")
-        else:
-            net = ParamLayers(
-                noise_dim=noise_dim,
-                particles=num_particles,
-                input_tensor_spec=input_tensor_spec,
-                conv_layer_params=conv_layer_params,
-                fc_layer_params=fc_layer_params,
-                last_layer_param=last_layer_param,
-                last_activation=math_ops.identity,
-                hidden_layers=hidden_layers,
-                activation=activation,
-                use_fc_bn=use_fc_bn,
-                use_bias=True,
-                optimizer=optimizer,
-                name="Generator")
 
         if function_vi:
             assert function_bs is not None, (
@@ -208,15 +143,6 @@ class HyperNetwork(SLAlgorithm):
         else:
             critic = None
 
-        if logging_network:
-            logging.info("Generated network")
-            logging.info("-" * 68)
-            logging.info(param_net)
-
-            logging.info("Generator network")
-            logging.info("-" * 68)
-            logging.info(net)
-
         if par_vi == 'svgd':
             par_vi = 'svgd3'
 
@@ -233,7 +159,6 @@ class HyperNetwork(SLAlgorithm):
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
-            functional_gradient=functional_gradient,
             amortize_vi=amortize_vi,
             optimizer=None,
             name=name)
@@ -255,14 +180,13 @@ class HyperNetwork(SLAlgorithm):
         self._logging_evaluate = logging_evaluate
         self._config = config
 
-        if not self._amortize_vi:
-            particle_params = self._generator.predict_step(
-                batch_size=num_particles, training=True).output
-            self._params = torch.nn.Parameter(particle_params.clone(),
-                requires_grad=True)
-            self._particle_optimizer = particle_optimizer
-            self._particle_optimizer.add_param_group({"params": self._params})
-            self._param_net.set_parameters(self._params.data)
+        particle_params = self._generator.predict_step(
+            batch_size=num_particles, training=True).output
+        self._params = torch.nn.Parameter(particle_params.clone(),
+            requires_grad=True)
+        self._particle_optimizer = particle_optimizer
+        self._particle_optimizer.add_param_group({"params": self._params})
+        self._param_net.set_parameters(self._params.data)
    
     def set_num_particles(self, num_particles):
         """Set the number of particles to sample through one forward
@@ -273,15 +197,10 @@ class HyperNetwork(SLAlgorithm):
     def num_particles(self):
         return self._num_particles
 
-    def sample_parameters(self, noise=None, num_particles=None, training=True):
+    def get_parameters(self, noise=None, num_particles=None, training=True):
         "Sample parameters for an ensemble of networks." ""
-        if noise is None and num_particles is None:
-            num_particles = self._num_particles
-        if self._amortize_vi:
-            output = self._generator.predict_step(
-                noise=noise, batch_size=num_particles, training=training).output
-        else:
-            output = self._params#.data.clone().requires_grad_(True)
+        output = self._params.data.clone()
+        if not self._function_vi:
             self._param_net.set_parameters(output)
         return output
 
@@ -300,51 +219,13 @@ class HyperNetwork(SLAlgorithm):
         """
         if params is None:
             params = self.sample_parameters(num_particles=num_particles)
-        self._param_net.set_parameters(params)
-        outputs, _ = self._param_net(inputs)
+        if not self._functional_vi:
+            self._param_net.set_parameters(params)
+            outputs, _ = self._param_net(inputs)
+        else:
+            outputs = params
         return AlgStep(output=outputs, state=(), info=())
-     
-    def train_iter(self, state=None):
-        """ Perform a single (iteration) epoch of training"""
-        assert self._train_loader is not None, "Must set data_loader first"
-        alf.summary.increment_global_counter()
-        with record_time("time/train"):
-            loss = 0.
-            if self._loss_type == 'classification':
-                avg_acc = []
-            for batch_idx, (data, target) in enumerate(self._train_loader):
-                data = data.to(alf.get_default_device())
-                target = target.to(alf.get_default_device())
-                alg_step = self.train_step((data, target), state=state)
-                if self._amortize_vi or self._function_vi:
-                    loss_info, params = self.update_with_gradient(alg_step.info)
-                else:
-                    update_direction = alg_step.info.loss
-                    self._particle_optimizer.zero_grad()
-                    self._params.grad = update_direction
-                    self._particle_optimizer.step()
-                    loss_info = alg_step.info
-                    params =  [('ensemble_params', 0)]
-
-                if hasattr(loss_info.extra, 'generator'):
-                    loss += loss_info.extra.generator.loss
-                else:
-                    loss += loss_info.loss
-                if self._loss_type == 'classification':
-                    if hasattr(alg_step.info.extra, 'generator'):
-                        avg_acc.append(alg_step.info.extra.generator.extra)
-                    else:
-                        avg_acc.append(alg_step.info.extra)
-        acc = None
-        if self._loss_type == 'classification':
-            acc = torch.as_tensor(avg_acc).mean() * 100
-        if self._logging_training:
-            if self._loss_type == 'classification':
-                logging.info("Avg acc: {}".format(acc))
-            logging.info("Cum loss: {}".format(loss))
-        #self.summarize_train(loss_info, params, cum_loss=loss, avg_acc=acc)
-        return batch_idx + 1
-
+    
     def train_step(self,
                    inputs,
                    num_particles=None,

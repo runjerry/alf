@@ -44,6 +44,11 @@ class SLAlgorithm(Algorithm):
 
     ``SLAlgorithm`` is meant to provide the basic and essential functions for 
     training a predictor, or an ensemble of predictors on a fixed dataset. 
+    SL algorithm may also be used to train particle based VI models. 
+    SL algorithm is distinct from the hypernetwork algorithm, as there
+    is no amoritization step. SL algorithm results in a set of samples 
+    (particles), like MCMC methods, rather than a sampling distrbution 
+    given by the hypernetwork algorithm
 
     Most of the key functions are inherited from the ``Algorithm`` base class. 
     But are further expanded for use in the supervised learning context. 
@@ -70,7 +75,8 @@ class SLAlgorithm(Algorithm):
     ``SLAlgorithm`` also can also be used to instantiate and train additional 
         modules required by other algorithms. Right now we explicitly support
         training of the critic network used by the particle VI method Minmax
-        Amortized SVGD with the ``minmax_critic_grad()`` function. 
+        Amortized SVGD with the ``minmax_critic_grad()`` function.
+
     """
 
     def __init__(self,
@@ -81,6 +87,7 @@ class SLAlgorithm(Algorithm):
                  last_layer_param=None,
                  last_activation=None,
                  net=None,
+                 amortize_predictor=True,
                  use_fc_bn=False,
                  predictor_size=1,
                  predictor_vote=None,
@@ -171,11 +178,12 @@ class SLAlgorithm(Algorithm):
                     last_use_fc_bn=use_fc_bn,
                     name='Network')
                 logging.info("Initialized single model")
-        
+
         if logging_network:
             logger.info(net)
 
         self._net = net
+        self._amortize_predictor = amortize_predictor
         self._train_loader = None
         self._test_loader = None
         self._use_fc_bn = use_fc_bn
@@ -255,13 +263,24 @@ class SLAlgorithm(Algorithm):
                 outputs: Tensor with shape (batch_size, dim)
                 info: LossInfo
         """
-        loss, outputs = self._neglogprob(inputs)
-        return AlgStep(
-            output=outputs,
-            state=(),
-            info=LossInfo(
-                loss=loss.loss,
-                extra=loss.extra))
+        if self._par_vi is not 'ml':
+            step = self._generator.train_step(
+                inputs=None,
+                loss_func=functools.partial(self._neglogprob, inputs),
+                batch_size=self._num_predictors,
+                entropy_regularization=entropy_regularization,
+                state=())
+            phi = gen_step.info
+            self._net.grad = phi
+        else:
+            loss, outputs = self._neglogprob(inputs)
+            step = AlgStep(
+                output=outputs,
+                state=(),
+                info=LossInfo(
+                    loss=loss.loss,
+                    extra=loss.extra))
+        return step
     
     def evaluate(self):
         """Evaluate the network/ensemeble on the test dataset. """
@@ -340,7 +359,7 @@ class SLAlgorithm(Algorithm):
             reduction='sum')
         return NetworkLossInfo(loss=loss, extra=())
 
-    def _neglogprob(self, inputs):
+    def _neglogprob(self, inputs, params=None):
         """
         Computes the negative log probability for network outputs.
         
@@ -480,6 +499,8 @@ class SLAlgorithm(Algorithm):
                            transform_func=None,
                            entropy_regularization=1.,
                            state=()):
+        if self._amortize_predictor:
+            inputs = inputs.detach().requires_grad_(True)
         if transform_func is not None:
             inputs, density_outputs = transform_func(inputs)
             n_perturbed = density_outputs.shape[1]
@@ -519,6 +540,6 @@ class SLAlgorithm(Algorithm):
         stein_pq = neglogp_f - entropy_regularization * tr_critic#.unsqueeze(1) # [n x 1]
         l2_penalty = (critic_outputs * critic_outputs).sum(1).mean() * lamb
         loss_propagated = stein_pq.mean() + l2_penalty
-        
+    
         return loss, loss_propagated
     

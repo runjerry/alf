@@ -157,18 +157,18 @@ class HMCTest(alf.test.TestCase):
 
         def _test():
             return algorithm.sample(params, num_samples)
-        samples = _test()
-        samples = torch.cat(samples).reshape(len(samples),-1)
-        self.plot_hmc_funnel(samples.cpu().numpy())
+        #samples = _test()
+        #samples = torch.cat(samples).reshape(len(samples),-1)
+        #self.plot_hmc_funnel(samples.cpu().numpy())
 
         # compute the statistics of the ith marginal p(y) w.r.t i
-        pv_mean = torch.tensor([0])
-        pv_std = torch.tensor([3])
-        for i in range(samples.shape[1]):
-            sample_mean = samples[:, i].mean()
-            sample_std = samples[:, i].std()
-            self.assertTensorClose(sample_mean, pv_mean, .3)
-            self.assertTensorClose(sample_std, pv_std, .8)
+        #pv_mean = torch.tensor([0])
+        #pv_std = torch.tensor([3])
+        #for i in range(samples.shape[1]):
+        #    sample_mean = samples[:, i].mean()
+        #    sample_std = samples[:, i].std()
+        #    self.assertTensorClose(sample_mean, pv_mean, .3)
+        #    self.assertTensorClose(sample_std, pv_std, .8)
         
         
     def generate_regression_data(self, n_train, n_test):
@@ -256,13 +256,14 @@ class HMCTest(alf.test.TestCase):
                 ((preds.mean(0) - test_labels)**2).mean()))
             return preds
 
-        hmc_params = _train()
-        bnn_preds = _test(hmc_params)
-        self.plot_bnn_regression(bnn_preds, (train_samples, test_samples))
+        #hmc_params = _train()
+        #bnn_preds = _test(hmc_params)
+        #self.plot_bnn_regression(bnn_preds, (train_samples, test_samples))
     
     def generate_class_data(self,
         n_samples=100,
         means=[(2., 2.), (-2., 2.), (2., -2.), (-2., -2.)]):
+        #means=[(2., 2.), (-2., -2.)]):
         data = torch.zeros(n_samples, 2)
         labels = torch.zeros(n_samples)
         size = n_samples//len(means)
@@ -278,7 +279,7 @@ class HMCTest(alf.test.TestCase):
         return data, labels.long()
     
     def plot_bnn_classification(self, i, algorithm, samples, conf_style='mean',
-        tag=''):
+        tag='restars'):
         x = torch.linspace(-10, 10, 100)
         y = torch.linspace(-10, 10, 100)
         gridx, gridy = torch.meshgrid(x, y)
@@ -366,21 +367,32 @@ class HMCTest(alf.test.TestCase):
                 F.cross_entropy(preds.mean(0), test_labels).mean()))
             return preds
         
-        hmc_params = _train()
-        from sklearn.manifold import MDS
-        mds = MDS(n_components=2)
-        _params = torch.stack(hmc_params).detach().cpu().numpy()
-        _parmas = _params[::25]
-        print (_params.shape)
-        mds.fit(_params)
-        X = mds.fit_transform(_params)
-        plt.scatter(X[:, 0], X[:, 1], label='mds points')
-        plt.savefig('plots/mds_plot_hmc_small.png')
-        plt.close('all')
-        bnn_preds = _test(hmc_params)
-        with torch.no_grad():
-            self.plot_bnn_classification(num_samples, algorithm, hmc_params,
-            'entropy', 'hmc_4means_l50_cmap')
+        for i in range(89, 90):
+            #hmc_params = _train()
+            #from sklearn.manifold import MDS
+            #mds = MDS(n_components=2)
+            import glob
+            hmc_data = []
+            paths = glob.glob('hmc_runs/*')
+            for path in paths:
+                arr = np.load(path)
+                hmc_data.append(torch.from_numpy(arr))
+            hmc_params = torch.stack(hmc_data)[:, ::100, :].reshape(-1, 184).cuda()
+
+            #_params = torch.stack(hmc_params).detach().cpu().numpy()
+            #_parmas = _params[::25]
+            #print (_params.shape)
+            #mds.fit(_params)
+            #X = mds.fit_transform(_params)
+            #plt.scatter(X[:, 0], X[:, 1], label='mds points')
+            #plt.savefig('plots/mds_plot_hmc_small.png')
+            #plt.close('all')
+            #np.save('hmc_runs_2cls21/hmc_params_run_{}.npy'.format(i), _params)
+            bnn_preds = _test(hmc_params)
+            print ('plotting')
+            with torch.no_grad():
+                self.plot_bnn_classification(num_samples, algorithm, hmc_params,
+                'entropy', 'hmc_2means_l50_cmap')
         
     def cov(self, data, rowvar=False):
         """Estimate a covariance matrix given data.
@@ -486,11 +498,11 @@ class HMCTest(alf.test.TestCase):
             self.assertLess(smean_err, .5)
             self.assertLess(scov_err, .5)
 
-        params_hmc = _train()
-        _test(params_hmc)
+        #params_hmc = _train()
+        #_test(params_hmc)
 
-        print("ground truth mean: {}".format(true_mean))
-        print("ground truth cov norm: {}".format(true_cov.norm()))
+        #print("ground truth mean: {}".format(true_mean))
+        #print("ground truth cov norm: {}".format(true_cov.norm()))
 
 if __name__ == "__main__":
     alf.test.main()

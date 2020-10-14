@@ -52,6 +52,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
     
     def generate_class_data(self, n_samples=100,
         means=[(2., 2.), (-2., 2.), (2., -2.), (-2., -2.)]):
+        #means=[(2., 2.), (-2., -2.)]):
 
         data = torch.zeros(n_samples, 2)
         labels = torch.zeros(n_samples)
@@ -64,9 +65,14 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         
         return data, labels.long()
     
-    def plot_classification(self, i, algorithm, conf_style='entropy', tag=''):
-        os.makedirs('plots/{}'.format(tag), exist_ok=True)
+    def plot_classification(self, i, algorithm, conf_style='entropy', tag='',
+        amortize='', fvi=''):
         basedir = 'plots/{}'.format(tag)
+        if not amortize:
+            basedir += '/ensemble'
+        if fvi:
+            basedir += '/fvi'
+        os.makedirs(basedir, exist_ok=True)
         x = torch.linspace(-10, 10, 100)
         y = torch.linspace(-10, 10, 100)
         gridx, gridy = torch.meshgrid(x, y)
@@ -88,7 +94,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         
         p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_outputs,
             cmap='rainbow')
-        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        #p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("{}".format(conf_style))
         plt.savefig(basedir+'/conf_map-{}_{}.png'.format(conf_style, i))
@@ -96,7 +102,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
 
         p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=conf_std,
             cmap='rainbow')
-        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        #p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("confidance (std)")
         plt.savefig(basedir+'/conf_map-std_{}.png'.format(i))
@@ -104,16 +110,21 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         
         p1 = plt.scatter(grid[:, 0].cpu(), grid[:, 1].cpu(), c=labels,
             cmap='rainbow')
-        p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
+        #p2 = plt.scatter(data[:, 0].cpu(), data[:, 1].cpu(), c='black')
         cbar = plt.colorbar(p1)
         cbar.set_label("predicted labels")
         plt.savefig(basedir+'/conf_map-labels_{}.png'.format(i))
         plt.close('all')
 
-    @parameterized.parameters(#('svgd'), ('gfsf'), ('minmax'),
-                              ('svgd', True), ('gfsf', True), ('minmax', True))
+    @parameterized.parameters(#('svgd3', False, False), ('svgd3', False, True),
+                              ('svgd3', True, False), ('svgd3', True, True),
+                              ('gfsf', False, False), ('gfsf', False, True),
+                              ('gfsf', True, False), ('gfsf', True, True))
+                              #('minmax', False, False), ('minmax', False, True),
+                              #('minmax', True, False), ('minmax', True, True))
     def test_classification_hypernetwork(self,
                                          par_vi='minmax',
+                                         amortize=True,
                                          function_vi=False,
                                          particles=100):
         """
@@ -124,6 +135,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         """
         print ('Hypernetwork: Fitting 4 Classes')
         print ('params: {} - {} particles'.format(par_vi, particles))
+        print ("Amortize = {}, function_vi = {}".format(amortize, function_vi))
         input_size = 2
         output_dim = 4
         batch_size = 100
@@ -136,23 +148,25 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         test_nsamples = 20
         inputs, targets = self.generate_class_data(train_nsamples)
         test_inputs, test_targets = self.generate_class_data(test_nsamples)
-        
+
         algorithm = HyperNetwork(
             input_tensor_spec=input_spec,
             fc_layer_params=((10, True), (10, True)),
             last_layer_param=(output_dim, True),
             last_activation=math_ops.identity,
             noise_dim=noise_dim,
-            hidden_layers=(16, 16),
+            hidden_layers=(32, 32),
             loss_type='classification',
             par_vi=par_vi,
+            amortize_vi=amortize,
+            particle_optimizer=alf.optimizers.Adam(lr=1e-2),
             function_vi=function_vi,
-            function_space_samples=20,
+            function_space_samples=10,
             function_bs=train_batch_size,
             num_particles=particles,
             parameterization=parameterization,
             optimizer=alf.optimizers.Adam(lr=1e-4),
-            critic_optimizer=alf.optimizers.Adam(1e-4),
+            critic_optimizer=alf.optimizers.Adam(lr=1e-4),
             critic_hidden_layers=(100, 100),
             critic_fc_bn=True,
             critic_train_iters=5)
@@ -169,24 +183,28 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
                 inputs=(train_inputs, train_targets),
                 entropy_regularization=entropy_regularization,
                 state=())
+            if amortize or function_vi:
+                loss_info, params = algorithm.update_with_gradient(alg_step.info)
+            else:
+                update_direction = alg_step.info.loss
+                algorithm._particle_optimizer.zero_grad()
+                algorithm._params.grad = update_direction
+                algorithm._particle_optimizer.step()
 
-            algorithm.update_with_gradient(alg_step.info)
-            return (alg_step.info.extra.generator.extra)
-        
         def _test(i):
             outputs, _ = algorithm._param_net(test_inputs)
 
             params = algorithm.sample_parameters(num_particles=200)
             _params = params.detach().cpu().numpy()
-            from sklearn.decomposition import PCA
-            pca = PCA(n_components=2)
-            pca.fit(_params)
-            X = pca.transform(_params)
-            #trans = umap.UMAP(n_neighbors=5, random_state=42).fit(_params)
-            #X = trans.embedding_
-            plt.scatter(X[:, 0], X[:, 1], label='pca embeddeding')
-            plt.savefig('plots/pca_svgd_fvi_hypernetwork_clf.png')
-            plt.close('all')
+
+            import os
+            basedir = 'plots/{}'.format(par_vi)
+            if not amortize:
+                basedir += '/ensemble'
+            if function_vi:
+                basedir += '/fvi'
+            os.makedirs(basedir, exist_ok=True)
+            np.save(basedir+'/params.npy', _params)
 
             probs = F.softmax(outputs, dim=-1)
             preds = probs.mean(1).cpu().argmax(-1)
@@ -206,14 +224,16 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
             print ('all particles acc: ', sample_acc.item())
 
             with torch.no_grad():
-                self.plot_classification(i, algorithm, 'entropy', par_vi+'_fvi')
+                self.plot_classification(i, algorithm, 'entropy', par_vi,
+                    amortize, function_vi)
             return sample_preds, targets_unrolled
-
-        train_iter = 8000
+        if par_vi == 'minmax':
+            train_iter = 15000
+        else:
+            train_iter = 10000
         for i in range(train_iter):
-            acc = _train()
+            _train()
             if i % 1000 == 0:
-                print ('train acc', acc.item()*100.)
                 preds, out_targets = _test(i)
 
 if __name__ == "__main__":
