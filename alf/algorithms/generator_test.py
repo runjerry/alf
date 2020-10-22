@@ -22,6 +22,7 @@ import torch.nn as nn
 import alf
 from alf.algorithms.generator import Generator
 from alf.networks import Network
+from alf.networks.relu_mlp import ReluMLP
 from alf.tensor_specs import TensorSpec
 from alf.algorithms.sl_algorithm import SLAlgorithm
 from alf.utils import math_ops
@@ -32,8 +33,9 @@ class Net(Network):
         super().__init__(
             input_tensor_spec=TensorSpec(shape=(dim, )), name="Net")
 
-        self.fc = nn.Linear(3, dim, bias=False)
-        w = torch.tensor([[1, 2], [-1, 1], [1, 1]], dtype=torch.float32)
+        self.fc = nn.Linear(2, dim, bias=False)
+        #w = torch.tensor([[1, 2], [-1, 1], [1, 1]], dtype=torch.float32)
+        w = torch.tensor([[1, 2], [1, 1]], dtype=torch.float32)
         self.fc.weight = nn.Parameter(w.t())
 
     def forward(self, input, state=()):
@@ -65,17 +67,20 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
-        dict(entropy_regularization=1.0, par_vi='gfsf'),
-        dict(entropy_regularization=1.0, par_vi='svgd'),
-        dict(entropy_regularization=1.0, par_vi='svgd2'),
-        dict(entropy_regularization=1.0, par_vi='svgd3'),
-        dict(entropy_regularization=1.0, par_vi='minmax'),
-        dict(entropy_regularization=0.0),
-        dict(entropy_regularization=0.0, mi_weight=1),
-    )
+        #dict(entropy_regularization=1.0, par_vi='svgd3', functional_gradient=True))
+        #(1.0, 'gfsf'))
+        (1.0, 'svgd3', True))
+        #dict(entropy_regularization=1.0, par_vi='gfsf'),
+        #dict(entropy_regularization=1.0, par_vi='svgd'),
+        #dict(entropy_regularization=1.0, par_vi='svgd2'),
+        #dict(entropy_regularization=1.0, par_vi='minmax'),
+        #dict(entropy_regularization=0.0),
+        #dict(entropy_regularization=0.0, mi_weight=1),
+    #)
     def test_generator_unconditional(self,
                                      entropy_regularization=1.0,
                                      par_vi=None,
+                                     functional_gradient=False,
                                      mi_weight=None):
         r"""
         The generator is trained to match (STEIN) / maximize (ML) the likelihood
@@ -86,17 +91,31 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         logging.info("entropy_regularization: %s par_vi: %s mi_weight: %s" %
                      (entropy_regularization, par_vi, mi_weight))
         dim = 2
-        batch_size = 512
-        net = Net(dim)
+        batch_size = 4
         hidden_size = 10
+        noise_dim = 2
+        if functional_gradient:
+            noise_dim = 2
+            input_dim = TensorSpec((noise_dim, ))
+            net = ReluMLP(input_dim, hidden_layers=(), bias=False, output_size=2)
+            net._fc_layers[0].weight.data = torch.tensor([[2, 2], [2, 2]],
+                dtype=torch.float32).T
+        else:
+            #net = Net(dim)
+            input_dim = TensorSpec((noise_dim, ))
+            net = ReluMLP(input_dim, hidden_layers=(), bias=False, output_size=2)
+            net._fc_layers[0].weight.data = torch.tensor([[1, 2], [1, 1]],
+                dtype=torch.float32).T
+            print (net)
         generator = Generator(
             dim,
-            noise_dim=3,
+            noise_dim=noise_dim,
             entropy_regularization=entropy_regularization,
             net=net,
             mi_weight=mi_weight,
             par_vi=par_vi,
-            optimizer=alf.optimizers.AdamTF(lr=1e-3))
+            functional_gradient=functional_gradient,
+            optimizer=alf.optimizers.AdamTF(lr=3e-3))
         
         if par_vi == 'minmax':
             critic = SLAlgorithm(
@@ -136,9 +155,14 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
                 batch_size=batch_size)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(5000):
+        for i in range(200000):
             _train(i)
-            learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
+            if True:#functional_gradient:
+                learned_var = torch.matmul(
+                    net._fc_layers[0].weight,
+                    net._fc_layers[0].weight.t())
+            else:
+                learned_var = torch.matmul(net.fc.weight, net.fc.weight.t())
             if i % 500 == 0:
                 print(i, "learned var=", learned_var)
 
@@ -153,8 +177,8 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
 
     @parameterized.parameters(
         dict(entropy_regularization=1.0),
-        dict(entropy_regularization=0.0),
-        dict(entropy_regularization=0.0, mi_weight=1),
+        #dict(entropy_regularization=0.0),
+        #dict(entropy_regularization=0.0, mi_weight=1),
     )
     def test_generator_conditional(self,
                                    entropy_regularization=0.0,
@@ -196,12 +220,12 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(5000):
-            _train()
-            learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
-            if i % 500 == 0:
-                print(i, "learned var=", learned_var)
-                print("u=", net.fc2.weight.t())
+        #for i in range(5000):
+        #    _train()
+        #    learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
+        #    if i % 500 == 0:
+        #        print(i, "learned var=", learned_var)
+        #        print("u=", net.fc2.weight.t())
 
         if mi_weight is not None:
             self.assertGreater(float(torch.sum(torch.abs(learned_var))), 0.5)

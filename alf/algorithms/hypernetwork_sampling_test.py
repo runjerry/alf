@@ -117,11 +117,12 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         plt.close('all')
 
     @parameterized.parameters(#('svgd3', False, False), ('svgd3', False, True),
-                              ('svgd3', True, False), ('svgd3', True, True),
-                              ('gfsf', False, False), ('gfsf', False, True),
-                              ('gfsf', True, False), ('gfsf', True, True))
-                              #('minmax', False, False), ('minmax', False, True),
+                              ('svgd3', True, True), #('svgd3', True, True),
+                              ('gfsf', True, True), #('gfsf', False, True),
+                              #('gfsf', True, False), (#'gfsf', True, True))
+                              ('minmax', True, True),# ('minmax', False, True),
                               #('minmax', True, False), ('minmax', True, True))
+    )
     def test_classification_hypernetwork(self,
                                          par_vi='minmax',
                                          amortize=True,
@@ -139,7 +140,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         input_size = 2
         output_dim = 4
         batch_size = 100
-        noise_dim = 32
+        noise_dim = 16
         parameterization = 'layer'
         input_spec = TensorSpec((input_size, ), torch.float32)
         train_batch_size = 100
@@ -155,13 +156,13 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
             last_layer_param=(output_dim, True),
             last_activation=math_ops.identity,
             noise_dim=noise_dim,
-            hidden_layers=(32, 32),
+            hidden_layers=(16, 16),
             loss_type='classification',
             par_vi=par_vi,
             amortize_vi=amortize,
             particle_optimizer=alf.optimizers.Adam(lr=1e-2),
             function_vi=function_vi,
-            function_space_samples=10,
+            function_space_samples=95,
             function_bs=train_batch_size,
             num_particles=particles,
             parameterization=parameterization,
@@ -228,9 +229,9 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
                     amortize, function_vi)
             return sample_preds, targets_unrolled
         if par_vi == 'minmax':
-            train_iter = 15000
+            train_iter = 20000
         else:
-            train_iter = 10000
+            train_iter = 100000
         for i in range(train_iter):
             _train()
             if i % 1000 == 0:

@@ -25,6 +25,7 @@ from sklearn.metrics import roc_auc_score
 import alf
 from alf.algorithms.algorithm import Algorithm
 from alf.algorithms.config import TrainerConfig
+from alf.networks.relu_mlp import ReluMLP
 from alf.data_structures import AlgStep, LossInfo, namedtuple
 from alf.algorithms.generator import Generator
 from alf.algorithms.hypernetwork_networks import ParamNetwork
@@ -164,13 +165,20 @@ class HyperNetwork(SLAlgorithm):
                 "can only be parameterized by \"network\" or \"layer\" " \
                 "generators"
         if parameterization == 'network':
-            net = EncodingNetwork(
-                noise_spec,
-                fc_layer_params=hidden_layers,
-                use_fc_bn=use_fc_bn,
-                last_layer_size=gen_output_dim,
-                last_activation=math_ops.identity,
-                name="Generator")
+            if functional_gradient:
+                net = ReluMLP(
+                    noise_spec,
+                    hidden_layers=hidden_layers,
+                    output_size=gen_output_dim,
+                    name='Generator')
+            else:
+                net = EncodingNetwork(
+                    noise_spec,
+                    fc_layer_params=hidden_layers,
+                    use_fc_bn=use_fc_bn,
+                    last_layer_size=gen_output_dim,
+                    last_activation=math_ops.identity,
+                    name="Generator")
         else:
             net = ParamLayers(
                 noise_dim=noise_dim,
@@ -455,8 +463,8 @@ class HyperNetwork(SLAlgorithm):
         outputs = outputs.view(num_particles, -1)  # [P, B * D]
 
         samples = data[-self._function_space_samples:]
-        noise = torch.zeros_like(samples).uniform_(.5, 1)
-        perturbed_samples = samples * noise
+        noise = torch.zeros_like(samples).uniform_(-3, 4)
+        perturbed_samples = noise#samples * noise
         density_outputs, _ = self._param_net(perturbed_samples)
         density_outputs = density_outputs.transpose(0, 1)
         density_outputs = density_outputs.view(num_particles, -1)

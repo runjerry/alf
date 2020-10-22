@@ -159,7 +159,10 @@ class Generator(Algorithm):
             elif par_vi == 'svgd2':
                 self._grad_func = self._svgd_grad2
             elif par_vi == 'svgd3':
-                self._grad_func = self._svgd_grad3
+                if functional_gradient:
+                    self._grad_func = self._svgd_grad3_functional
+                else:
+                    self._grad_func = self._svgd_grad3
             elif par_vi == 'minmax':
                 self._grad_func = self._minmax_grad
             else:
@@ -292,6 +295,8 @@ class Generator(Algorithm):
             outputs, gen_inputs = self._predict(inputs, batch_size=batch_size)
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
+        if self._functional_gradient:
+            outputs = (outputs, gen_inputs)
         loss, loss_propagated = self._grad_func(
             inputs, outputs, loss_func, entropy_regularization, transform_func)
         mi_loss = ()
@@ -479,14 +484,8 @@ class Generator(Algorithm):
         """
         assert inputs is None, '"svgd3" does not support conditional generator'
         num_particles = outputs.shape[0]
-        if self._amortize_vi:
-            if self._functional_gradient:
-                gen_inputs = torch.randn(num_particles, self._noise_dim)
-                outputs2, jac, _ = self._net(gen_inputs, requires_jac=True)
-            else:
-                outputs2, _ = self._predict(inputs, batch_size=num_particles)
-        else:
-            outputs2 = outputs.detach().requires_grad_(True)
+        gen_output_dim = outputs.shape[-1]
+        outputs2, _ = self._predict(inputs, batch_size=num_particles)
 
         if transform_func is not None:
             outputs, density_outputs = transform_func(outputs)
@@ -514,20 +513,48 @@ class Generator(Algorithm):
         kernel_weight, kernel_grad = self._rbf_func2(outputs2, outputs)
         kernel_logp = torch.matmul(kernel_weight.t(),
                                    loss_grad) / num_particles  # [N, D]
-        if self._functional_gradient:
-            print (jac.shape)
-            jac_inv = torch.inverse(jac)
-            print (jac_inv.shape)
-            print (kernel_grad.shape)
-            kernel_grad = kernel_grad * jac_inv
-
         grad = kernel_logp - entropy_regularization * kernel_grad.mean(0)
-        if self._amortize_vi or (transform_func is not None):
-            loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
-        else:
-            loss_propagated = grad
+        loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
 
         return loss, loss_propagated
+
+    def _svgd_grad3_functional(self,
+                               inputs,
+                               outputs,
+                               loss_func,
+                               entropy_regularization,
+                               transform_func=None):
+        """
+        Compute particle gradients via SVGD, empirical expectation
+        evaluated by resampled particles of the same batch size. 
+        """
+        assert inputs is None, '"svgd3" does not support conditional generator'
+        outputs, gen_inputs = outputs  # f(z), z
+        num_particles = outputs.shape[0]
+        
+        gen_inputs2 = torch.randn(num_particles, self._noise_dim, requires_grad=True)  # z'
+        outputs2, jac_fz = self._net(gen_inputs2, requires_jac=True)[0]  # f(z'), df/dz
+
+        loss_inputs = outputs2
+        loss = loss_func(loss_inputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        
+        loss_grad = torch.autograd.grad(neglogp.sum(), outputs2)[0]  # [N2, D]
+        kernel_weight, kernel_grad = self._rbf_func2(gen_inputs2, gen_inputs)
+        kernel_logp = torch.matmul(kernel_weight.t(),
+                                   loss_grad) / num_particles  # [N, D]
+        
+        jac_inv = torch.inverse(jac_fz)  # [N2, D, D]
+        #print (jac_inv.shape, kernel_grad.shape)
+        kernel_grad = torch.einsum('ijk, aik->aij', jac_inv, kernel_grad)
+        grad = kernel_logp + entropy_regularization * kernel_grad.mean(0)
+        loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
+
+        return loss, loss_propagated
+
 
     def _gfsf_grad(self,
                    inputs,
