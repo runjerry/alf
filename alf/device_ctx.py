@@ -49,8 +49,8 @@ def set_default_device(device_name):
     Args:
         device_name (str): one of ("cpu", "cuda")
     """
-    torch.set_default_tensor_type(
-        _devece_ddtype_tensor_map[device_name][torch.get_default_dtype()])
+    torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+        #_devece_ddtype_tensor_map[device_name][torch.get_default_dtype()])
 
 
 def get_default_device():

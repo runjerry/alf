@@ -162,6 +162,7 @@ class EMAverager(nn.Module):
 
         def _create_variable(tensor_spec):
             var = tensor_spec.zeros()
+            print ('var', var, var.shape)
             self.register_buffer("_var%s" % var_id[0], var)
             var_id[0] += 1
             return var

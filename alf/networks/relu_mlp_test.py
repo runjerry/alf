@@ -43,6 +43,7 @@ class ReluMLPTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
+        dict(hidden_layers=()),
         dict(hidden_layers=(2, )),
         dict(hidden_layers=(2, 3)),
         dict(hidden_layers=(2, 3, 4)),
@@ -54,24 +55,29 @@ class ReluMLPTest(parameterized.TestCase, alf.test.TestCase):
         computed by calling autograd.
         """
         batch_size = 2
+        output_size = input_size
         spec = TensorSpec((input_size, ))
-        mlp = ReluMLP(spec, hidden_layers=hidden_layers)
+        mlp = ReluMLP(spec, hidden_layers=hidden_layers, output_size=output_size)
 
         # compute jac diag using direct approach
         x = torch.randn(batch_size, input_size, requires_grad=True)
         x1 = x.detach().clone()
         x1.requires_grad = True
-        jac_diag = mlp.compute_jac_diag(x1)
+        #jac_diag = mlp.compute_jac_diag(x1)
+        jac = mlp.compute_jac_f(x)
+        jac2 = mlp.compute_jac(x1)
+
+        self.assertArrayEqual(jac, jac2, 1e-6)
 
         # compute jac using autograd
         y, _ = mlp(x)
-        jac = jacobian(y, x)
+        jac2 = jacobian(y, x)
         jac_diag2 = []
         for i in range(batch_size):
-            jac_diag2.append(torch.diag(jac[i, :, i, :]))
+            jac_diag2.append(torch.diag(jac2[i, :, i, :]))
         jac_diag2 = torch.stack(jac_diag2, dim=0)
 
-        self.assertArrayEqual(jac_diag, jac_diag2, 1e-6)
+        #self.assertArrayEqual(jac_diag, jac_diag2, 1e-6)
 
 
 if __name__ == "__main__":

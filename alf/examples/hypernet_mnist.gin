@@ -2,7 +2,7 @@ import alf.algorithms.hypernetwork_algorithm
 import alf.trainers.policy_trainer
 
 # dataset config
-create_dataset.dataset_name='mnist'
+create_dataset.dataset_name='mnist-inlier'
 create_dataset.train_batch_size=50
 create_dataset.test_batch_size=100
 

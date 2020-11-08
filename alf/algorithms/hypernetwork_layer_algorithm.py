@@ -88,8 +88,6 @@ class HyperNetwork(SLAlgorithm):
                  optimizer=None,
                  critic_optimizer=None,
                  critic_hidden_layers=(100, 100),
-                 critic_train_iters=5,
-                 critic_fc_bn=False,
                  function_bs=None,
                  function_space_samples=0,
                  logging_network=False,
@@ -170,6 +168,7 @@ class HyperNetwork(SLAlgorithm):
                     noise_spec,
                     hidden_layers=hidden_layers,
                     output_size=gen_output_dim,
+                    bias=True,
                     name='Generator')
             else:
                 net = EncodingNetwork(
@@ -202,20 +201,6 @@ class HyperNetwork(SLAlgorithm):
         else:
             critic_input_dim = gen_output_dim
 
-        if par_vi == 'minmax':
-            critic = SLAlgorithm(
-                TensorSpec(shape=(critic_input_dim, )),
-                conv_layer_params=None,
-                fc_layer_params=critic_hidden_layers,
-                use_fc_bn=critic_fc_bn,
-                activation=torch.nn.functional.relu,
-                last_layer_param=critic_input_dim,
-                last_activation=math_ops.identity,
-                optimizer=critic_optimizer,
-                name="Critic")
-        else:
-            critic = None
-
         if logging_network:
             logging.info("Generated network")
             logging.info("-" * 68)
@@ -241,16 +226,18 @@ class HyperNetwork(SLAlgorithm):
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
+            critic_input_dim=critic_input_dim,
+            critic_hidden_layers=critic_hidden_layers,
             functional_gradient=functional_gradient,
             amortize_vi=amortize_vi,
             optimizer=None,
+            critic_optimizer=critic_optimizer,
             name=name)
         
         self._param_net = param_net
         self._parameterization = parameterization
         self._amortize_vi = amortize_vi
-        self._critic = critic
-        self._critic_train_iters = critic_train_iters
+        self._functional_gradient = functional_gradient
         self._function_vi = function_vi
         self._function_space_samples = function_space_samples
         self._num_particles = num_particles
@@ -286,10 +273,14 @@ class HyperNetwork(SLAlgorithm):
         if noise is None and num_particles is None:
             num_particles = self._num_particles
         if self._amortize_vi:
-            output = self._generator.predict_step(
+            if self._functional_gradient:
+                output, _ = self._generator._predict(batch_size=num_particles)
+            else:
+                output = self._generator.predict_step(
                 noise=noise, batch_size=num_particles, training=training).output
+            
         else:
-            output = self._params#.data.clone().requires_grad_(True)
+            output = self._params
             self._param_net.set_parameters(output)
         return output
 
@@ -308,6 +299,8 @@ class HyperNetwork(SLAlgorithm):
         """
         if params is None:
             params = self.sample_parameters(num_particles=num_particles)
+        if self._functional_gradient:
+            params = params[0]
         self._param_net.set_parameters(params)
         outputs, _ = self._param_net(inputs)
         return AlgStep(output=outputs, state=(), info=())
@@ -374,8 +367,7 @@ class HyperNetwork(SLAlgorithm):
             num_particles = self._num_particles
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
-        params = self.sample_parameters(num_particles=num_particles)
-        outputs = params
+        
         data, target = inputs
         if self._function_vi:
             loss_func = functools.partial(self._function_neglogprob,
@@ -386,24 +378,10 @@ class HyperNetwork(SLAlgorithm):
             loss_func = functools.partial(self._neglogprob, inputs)
             transform_func = None
 
-        if self._generator._par_vi == 'minmax':
-            for i in range(self._critic_train_iters):
-                self._critic._critic_train_step(
-                    outputs,
-                    loss_func,
-                    transform_func,
-                    entropy_regularization)
-                outputs = self.sample_parameters(num_particles=num_particles)
-            if transform_func is not None:
-                outputs, _ = transform_func(outputs)
-            critic_outputs, _ = self._critic._net(outputs)
-            outputs = (outputs, critic_outputs)
-        
         return self._generator.train_step(
             inputs=None,
             loss_func=loss_func,
             batch_size=num_particles,
-            outputs=outputs,
             entropy_regularization=entropy_regularization,
             transform_func=transform_func,
             state=())

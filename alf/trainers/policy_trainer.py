@@ -509,7 +509,7 @@ class SLTrainer(Trainer):
         
         if self._eval_uncertainty:
             outlier_train, outlier_test = create_dataset(
-                dataset_name='cifar_outlier')
+                dataset_name='mnist_outlier')
         else:
             outlier_train = None
             outlier_test = None

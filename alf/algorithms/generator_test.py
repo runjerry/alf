@@ -33,9 +33,8 @@ class Net(Network):
         super().__init__(
             input_tensor_spec=TensorSpec(shape=(dim, )), name="Net")
 
-        self.fc = nn.Linear(2, dim, bias=False)
-        #w = torch.tensor([[1, 2], [-1, 1], [1, 1]], dtype=torch.float32)
-        w = torch.tensor([[1, 2], [1, 1]], dtype=torch.float32)
+        self.fc = nn.Linear(3, dim, bias=False)
+        w = torch.tensor([[1, 2], [-1, 1], [1, 1]], dtype=torch.float32)
         self.fc.weight = nn.Parameter(w.t())
 
     def forward(self, input, state=()):
@@ -67,16 +66,17 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
-        #dict(entropy_regularization=1.0, par_vi='svgd3', functional_gradient=True))
-        #(1.0, 'gfsf'))
-        (1.0, 'svgd3', True))
         #dict(entropy_regularization=1.0, par_vi='gfsf'),
         #dict(entropy_regularization=1.0, par_vi='svgd'),
         #dict(entropy_regularization=1.0, par_vi='svgd2'),
+        #dict(entropy_regularization=1.0, par_vi='svgd3'),
         #dict(entropy_regularization=1.0, par_vi='minmax'),
-        #dict(entropy_regularization=0.0),
+        #dict(entropy_regularization=1.0, par_vi='svgd3', functional_gradient=True)
+        (1.0, 'minmax', True),
+        (1.0, 'svgd3', True),
+        dict(entropy_regularization=0.0),
         #dict(entropy_regularization=0.0, mi_weight=1),
-    #)
+    )
     def test_generator_unconditional(self,
                                      entropy_regularization=1.0,
                                      par_vi=None,
@@ -91,22 +91,20 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         logging.info("entropy_regularization: %s par_vi: %s mi_weight: %s" %
                      (entropy_regularization, par_vi, mi_weight))
         dim = 2
-        batch_size = 4
+        batch_size = 512
         hidden_size = 10
-        noise_dim = 2
+        noise_dim = 3
         if functional_gradient:
             noise_dim = 2
             input_dim = TensorSpec((noise_dim, ))
             net = ReluMLP(input_dim, hidden_layers=(), bias=False, output_size=2)
-            net._fc_layers[0].weight.data = torch.tensor([[2, 2], [2, 2]],
-                dtype=torch.float32).T
-        else:
-            #net = Net(dim)
-            input_dim = TensorSpec((noise_dim, ))
-            net = ReluMLP(input_dim, hidden_layers=(), bias=False, output_size=2)
             net._fc_layers[0].weight.data = torch.tensor([[1, 2], [1, 1]],
                 dtype=torch.float32).T
-            print (net)
+            critic_relu_mlp = True
+        else:
+            net = Net(dim)
+            critic_relu_mlp = False
+
         generator = Generator(
             dim,
             noise_dim=noise_dim,
@@ -115,20 +113,11 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             mi_weight=mi_weight,
             par_vi=par_vi,
             functional_gradient=functional_gradient,
-            optimizer=alf.optimizers.AdamTF(lr=3e-3))
+            critic_hidden_layers=(hidden_size, hidden_size),
+            critic_relu_mlp=critic_relu_mlp,
+            optimizer=alf.optimizers.AdamTF(lr=1e-3),
+            critic_optimizer=alf.optimizers.AdamTF(lr=1e-3))
         
-        if par_vi == 'minmax':
-            critic = SLAlgorithm(
-                TensorSpec(shape=(dim, ) ),
-                fc_layer_params=(hidden_size, hidden_size),
-                last_layer_param=dim,
-                use_fc_bn=True,
-                last_activation=math_ops.identity,
-                optimizer=alf.optimizers.AdamTF(lr=1e-3))
-            self._critic_train_iters = 2
-        else:
-            critic = None
-
         var = torch.tensor([1, 4], dtype=torch.float32)
         precision = 1. / var
 
@@ -138,26 +127,15 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
                 axis=-1)
 
         def _train(i):
-            if par_vi == 'minmax':
-                for _ in range(self._critic_train_iters):
-                    outputs, _ = generator._predict(batch_size=batch_size)
-                    critic._critic_train_step(outputs, _neglogprob,
-                        entropy_regularization=entropy_regularization)
-                outputs, _ = generator._predict(batch_size=batch_size)
-                critic_outputs = critic._net(outputs)[0].detach()
-                outputs = (outputs, critic_outputs)
-            else:
-                outputs = None
             alg_step = generator.train_step(
                 inputs=None,
-                outputs=outputs,
                 loss_func=_neglogprob,
                 batch_size=batch_size)
             generator.update_with_gradient(alg_step.info)
 
-        for i in range(200000):
+        for i in range(5000):
             _train(i)
-            if True:#functional_gradient:
+            if functional_gradient:
                 learned_var = torch.matmul(
                     net._fc_layers[0].weight,
                     net._fc_layers[0].weight.t())
@@ -220,12 +198,12 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
             alg_step = generator.train_step(inputs=y, loss_func=_neglogprob)
             generator.update_with_gradient(alg_step.info)
 
-        #for i in range(5000):
-        #    _train()
-        #    learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
-        #    if i % 500 == 0:
-        #        print(i, "learned var=", learned_var)
-        #        print("u=", net.fc2.weight.t())
+        for i in range(5000):
+            _train()
+            learned_var = torch.matmul(net.fc1.weight, net.fc1.weight.t())
+            if i % 500 == 0:
+                print(i, "learned var=", learned_var)
+                print("u=", net.fc2.weight.t())
 
         if mi_weight is not None:
             self.assertGreater(float(torch.sum(torch.abs(learned_var))), 0.5)
