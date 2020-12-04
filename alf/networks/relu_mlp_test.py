@@ -20,7 +20,7 @@ from alf.networks.relu_mlp import ReluMLP
 from alf.tensor_specs import TensorSpec
 
 
-def jacobian(y, x, create_graph=False):
+def jacobian(y, x, create_graph=False, allow_unused=False):
     """It is from Adam Paszke's implementation:
     https://gist.github.com/apaszke/226abdf867c4e9d6698bd198f3b45fb7
     """
@@ -30,8 +30,11 @@ def jacobian(y, x, create_graph=False):
     for i in range(len(flat_y)):
         grad_y[i] = 1.
         grad_x, = torch.autograd.grad(
-            flat_y, x, grad_y, retain_graph=True, create_graph=create_graph)
-        jac.append(grad_x.reshape(x.shape))
+            flat_y, x, grad_y, retain_graph=True, allow_unused=allow_unused, create_graph=create_graph)
+        if allow_unused==True:
+            print (grad_x)
+        else:
+            jac.append(grad_x.reshape(x.shape))
         grad_y[i] = 0.
 
     return torch.stack(jac).reshape(y.shape + x.shape)
@@ -63,21 +66,20 @@ class ReluMLPTest(parameterized.TestCase, alf.test.TestCase):
         x = torch.randn(batch_size, input_size, requires_grad=True)
         x1 = x.detach().clone()
         x1.requires_grad = True
-        #jac_diag = mlp.compute_jac_diag(x1)
-        jac = mlp.compute_jac_f(x)
+        jac_diag = mlp.compute_jac_diag(x1)
         jac2 = mlp.compute_jac(x1)
 
         self.assertArrayEqual(jac, jac2, 1e-6)
 
         # compute jac using autograd
         y, _ = mlp(x)
-        jac2 = jacobian(y, x)
+        jac2 = jacobian(y, x, True)
         jac_diag2 = []
         for i in range(batch_size):
             jac_diag2.append(torch.diag(jac2[i, :, i, :]))
         jac_diag2 = torch.stack(jac_diag2, dim=0)
 
-        #self.assertArrayEqual(jac_diag, jac_diag2, 1e-6)
+        self.assertArrayEqual(jac_diag, jac_diag2, 1e-6)
 
 
 if __name__ == "__main__":

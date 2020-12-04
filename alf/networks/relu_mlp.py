@@ -68,11 +68,7 @@ class ReluMLP(Network):
                  output_size=None,
                  bias=True,
                  hidden_layers=(64, 64),
-                 #activation=torch.nn.functional.elu_,
-                 #activation=torch.tanh,
-                 #activation=torch.relu_,
-                 activation=identity,
-                 #activation=torch.nn.functional.softplus,
+                 activation=torch.relu_,
                  name="ReluMLP"):
         """Create a ReluMLP.
 
@@ -122,9 +118,9 @@ class ReluMLP(Network):
         z = inputs
         for fc in self._fc_layers:
             z = fc(z)
-
+        
         if requires_jac:
-            z = (z, self._compute_jac())#_f(inputs))
+            z = (z, self._compute_jac())
         if requires_jac_diag:
             z = (z, self._compute_jac_diag())
 
@@ -142,7 +138,6 @@ class ReluMLP(Network):
         return jac
     
     def _compute_jac_f(self, inputs):
-
         def f(inputs):
             z = inputs
             for fc in self._fc_layers:
@@ -152,7 +147,7 @@ class ReluMLP(Network):
         for input in inputs:    
             jac.append(torch.autograd.functional.jacobian(f, input))
         return torch.stack(jac)
-
+ 
     def _compute_jac(self):
         """Compute the input-output Jacobian. """
         if len(self._hidden_layers) == 0:

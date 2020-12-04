@@ -78,6 +78,7 @@ class HyperNetwork(SLAlgorithm):
                  num_particles=10,
                  entropy_regularization=1.,
                  parameterization='layer',
+                 use_relu_mlp=False,
                  loss_type="classification",
                  voting="soft",
                  par_vi="svgd",
@@ -85,6 +86,8 @@ class HyperNetwork(SLAlgorithm):
                  particle_optimizer=None,
                  function_vi=False,
                  functional_gradient=False,
+                 use_pinverse=False,
+                 pinverse_batch_size=None,
                  optimizer=None,
                  critic_optimizer=None,
                  critic_hidden_layers=(100, 100),
@@ -191,6 +194,7 @@ class HyperNetwork(SLAlgorithm):
                 activation=activation,
                 use_fc_bn=use_fc_bn,
                 use_bias=True,
+                use_relu_mlp=use_relu_mlp,
                 optimizer=optimizer,
                 name="Generator")
 
@@ -229,6 +233,8 @@ class HyperNetwork(SLAlgorithm):
             critic_input_dim=critic_input_dim,
             critic_hidden_layers=critic_hidden_layers,
             functional_gradient=functional_gradient,
+            use_pinverse=use_pinverse,
+            pinverse_batch_size=pinverse_batch_size,
             amortize_vi=amortize_vi,
             optimizer=None,
             critic_optimizer=critic_optimizer,
