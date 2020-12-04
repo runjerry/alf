@@ -161,14 +161,14 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
         batch_size = train_nsamples
         inputs, targets = self.generate_class_data(train_nsamples)
         test_inputs, test_targets = self.generate_class_data(test_nsamples)
-        noise_dim = 184
+        noise_dim = 32
         algorithm = HyperNetwork(
             input_tensor_spec=input_spec,
             fc_layer_params=((10, True), (10, True)),#, (10, True)),
             last_layer_param=(output_dim, True),
             last_activation=math_ops.identity,
             noise_dim=noise_dim,
-            hidden_layers=(),
+            hidden_layers=(32,),
             use_relu_mlp=False,
             loss_type='classification',
             par_vi=par_vi,

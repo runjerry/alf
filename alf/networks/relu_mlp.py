@@ -150,16 +150,12 @@ class ReluMLP(Network):
  
     def _compute_jac(self):
         """Compute the input-output Jacobian. """
-        if len(self._hidden_layers) == 0:
-            mask = (self._fc_layers[-1].hidden_neurons > 0).float()
-            J = self._fc_layers[0].weight.unsqueeze(0).repeat(mask.shape[0], 1, 1)
-        else:
-            mask = (self._fc_layers[-2].hidden_neurons > 0).float()
-            J = torch.einsum('ia,ba,aj->bij', self._fc_layers[-1].weight, mask,
-                             self._fc_layers[-2].weight)
-            for fc in reversed(self._fc_layers[0:-2]):
-                mask = (fc.hidden_neurons > 0).float()
-                J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
+        mask = (self._fc_layers[-2].hidden_neurons > 0).float()
+        J = torch.einsum('ia,ba,aj->bij', self._fc_layers[-1].weight, mask,
+                         self._fc_layers[-2].weight)
+        for fc in reversed(self._fc_layers[0:-2]):
+            mask = (fc.hidden_neurons > 0).float()
+            J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
 
         return J  # [B, n_out, n_in]
    
