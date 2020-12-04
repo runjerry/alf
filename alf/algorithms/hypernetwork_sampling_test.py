@@ -244,7 +244,7 @@ class HyperNetworkSampleTest(parameterized.TestCase, alf.test.TestCase):
             print ('all particles acc: ', sample_acc.item())
 
             with torch.no_grad():
-                sub = '4cls_184z_0h_znewton3h128rms_5iter4lr_ad1e3_p100_cat'
+                sub = '4cls_184z_0h_znewton3h128_1iter4lr_ad1e3_p100_catz'
                 self.plot_classification(i, algorithm, 'entropy', par_vi,
                     amortize, function_vi, sub)
             return sample_preds, targets_unrolled

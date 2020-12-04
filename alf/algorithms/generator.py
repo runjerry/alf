@@ -126,15 +126,17 @@ class PinverseNet(torch.nn.Module):
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.linear_z = torch.nn.Linear(input_dim, h)
+        self.linear_zs = torch.nn.Linear(input_dim, h)
         self.linear1 = torch.nn.Linear(input_dim*100, h)
-        self.linear2 = torch.nn.Linear(h*2, h)
+        self.linear2 = torch.nn.Linear(h*3, h)
         self.linear3 = torch.nn.Linear(h, output_dim*100)
 
-    def forward(self, eps, z):
+    def forward(self, eps, z, zs):
         eps_flat = eps.view(eps.shape[0], -1)
         zx = self.linear_z(z)
+        zs = self.linear_zs(zs)
         x = self.linear1(eps_flat)
-        x = torch.cat((x, zx), dim=-1)
+        x = torch.cat((x, zx, zs), dim=-1)
         x = torch.nn.functional.relu(x)
 
         x = self.linear2(x)
@@ -677,15 +679,15 @@ class Generator(Algorithm):
 
         return loss, loss_propagated
 
-    def pinverse_fn(self, jac, eps, z):
+    def pinverse_fn(self, jac, eps, z, zs):
         """Input shapes:
             Jac (torch.tensor) of size [B2, D, D]
             eps (torch.tensor) of size [B2, B, D]
             z (torch.tensor) of size [B, D]
         """
         assert self.pinverse is not None, "must init pinverse and its optimizer"
-        for iter in range(5):
-            p = self.pinverse(eps.detach(), z.detach())
+        for iter in range(1):
+            p = self.pinverse(eps.detach(), z.detach(), zs.detach())
             jac_y = torch.einsum('ijk,iak->iaj', jac.detach(), p)
             loss = torch.nn.functional.mse_loss(jac_y, eps.detach())
 
@@ -734,7 +736,7 @@ class Generator(Algorithm):
             jac2 = torch.cat((jac, zero_vec), dim=-1)
             jac2_fz = jac2 + _lambda * id 
 
-        elif gen_inputs.shape[-1] == output.shape[-1]:
+        elif gen_inputs.shape[-1] == outputs.shape[-1]:
             z = gen_inputs
             z2 = torch.randn(num_particles, z_shape, requires_grad=True)  # z'
             outputs2, jac2 = self._net(z2, requires_jac=True)[0]  # f(z'), df/dz
@@ -744,7 +746,7 @@ class Generator(Algorithm):
             # [N2, N], [N2, N, D]
         kernel_weight, kernel_grad = self._rbf_func2(z2, z)
         if self._use_pinverse:
-            p = self.pinverse_fn(jac2_fz, kernel_grad, z2)
+            p = self.pinverse_fn(jac2_fz, kernel_grad, z, z2)
             kernel_grad = p
         else:
             jac2_inv = torch.inverse(jac2_fz)
