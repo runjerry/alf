@@ -138,6 +138,9 @@ minmax_runs_4cls/
 svgd_runs_4cls/
 gfsf_runs_4cls/
 hmc_runs/
+gfsf_runs_2cls2/
+minmax_runs_2cls2/
+svgd_runs_2cls2/
 
 data_m/
 data_nm/
