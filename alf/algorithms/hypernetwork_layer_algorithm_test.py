@@ -96,17 +96,14 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         # plt.show()
         plt.close('all')
 
-    @parameterized.parameters(#('svgd3', False, False), ('svgd3', True, False),
+    @parameterized.parameters(
                               #('svgd3', False, True), ('svgd3', True, True),
                               #('gfsf', False, False), ('gfsf', True, False),
                               #('gfsf', False, True), ('gfsf', True, True ),
-                              #('minmax', False, True, False),
-                              #('minmax', True, True, False),
-                              #('minmax', True, False),
-                              #('minmax', True, False),
-                              #('minmax', False, True), ('minmax', True, True))
                               ('svgd3', False, True, True),
-                              ('svgd3', False, True, False)
+                              ('svgd3', False, True, False),
+                              ('minmax', False, False, False),
+                              ('minmax', False, True, False),
     )
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
@@ -128,7 +125,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         """
 
         print ("Testing {} with {} particles".format(par_vi, num_particles))
-        print ("Amortize = {}, function_vi = {}".format(amortize, function_vi))
+        print ("Amortize: {}, \nFunction values: {}, \nFunctional gradient: {}".format(
+            amortize, function_vi, functional_gradient))
         input_size = 3
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1

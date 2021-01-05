@@ -194,7 +194,6 @@ class HyperNetwork(SLAlgorithm):
                 activation=activation,
                 use_fc_bn=use_fc_bn,
                 use_bias=True,
-                use_relu_mlp=use_relu_mlp,
                 optimizer=optimizer,
                 name="Generator")
 

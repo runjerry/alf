@@ -28,6 +28,8 @@ from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops
 from alf.utils.averager import AdaptiveAverager
 
+from scipy.sparse.linalg import bicg, bicgstab
+
 GeneratorLossInfo = namedtuple("GeneratorLossInfo",
                                ["generator", "mi_estimator"])
 
@@ -120,30 +122,44 @@ class CriticAlgorithm(Algorithm):
 
 class PinverseNet(torch.nn.Module):
     r"""PinverseNet
+        
+        Simple MLP network used with the functional gradient SVGD method
+        It is used to predict Ax given A for the purpose of optimizing 
+        a downstream objective Ax - b = 0
     """
-    def __init__(self, input_dim, output_dim, h):
+    def __init__(self, z_dim, hidden_size):
         super(PinverseNet, self).__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.linear_z = torch.nn.Linear(input_dim, h)
-        self.linear_zs = torch.nn.Linear(input_dim, h)
-        self.linear1 = torch.nn.Linear(input_dim*100, h)
-        self.linear2 = torch.nn.Linear(h*3, h)
-        self.linear3 = torch.nn.Linear(h, output_dim*100)
+        self.output_dim = z_dim
+        self.linear_z = torch.nn.Linear(z_dim, hidden_size)
+        self.linear_eps = torch.nn.Linear(z_dim, hidden_size)
+        self.linear_joint = torch.nn.Linear(hidden_size*2, hidden_size)
+        self.linear_out = torch.nn.Linear(hidden_size, z_dim)
 
-    def forward(self, eps, z, zs):
-        eps_flat = eps.view(eps.shape[0], -1)
-        zx = self.linear_z(z)
-        zs = self.linear_zs(zs)
-        x = self.linear1(eps_flat)
-        x = torch.cat((x, zx, zs), dim=-1)
+    def forward(self, eps, z):
+        """ Args:
+                eps (torch.tensor) of size [B2, B, D]
+                z2 (torch.tensor) of size [B2, D]
+            Returns:
+                (torch.tensor) of size [B2, B, D]
+        """
+        assert (eps.ndim == 3 and eps.shape[1] == z2.shape[0]), "outer dim "\
+            "of argument 1 should match dim 1 of argument 0"
+
+        b_dim = z.shape[0]
+        b2_dim = eps.shape[0]
+        eps = eps.reshape(b*b2, -1)
+        z = torch.repeat_interleave(z, b2_dim, dim=0)
+
+        x_z = self.linear_z(z)
+        x_eps = self.linear_eps(eps)
+        x = torch.cat((x_z, x_eps), dim=-1)
         x = torch.nn.functional.relu(x)
 
-        x = self.linear2(x)
+        x = self.linear_joint(x)
         x = torch.nn.functional.relu(x)
-        x = self.linear3(x)
-        x = x.view(eps.shape[0], eps.shape[0], self.output_dim)
-        return x                                                                              
+        x = self.linear_out(x)
+        output = x.view(b2_dim, b_dim, self.output_dim).squeeze()
+        return output                                                                            
 
 
 @gin.configurable
@@ -214,11 +230,12 @@ class Generator(Algorithm):
                  amortize_vi=True,
                  functional_gradient=False,
                  use_pinverse=False,
+                 pinverse_resolve=True,
                  pinverse_batch_size=None,
                  critic_input_dim=None,
                  critic_hidden_layers=(100, 100),
-                 critic_l2_weight=10.,
-                 critic_iter_num=2,
+                 critic_l2_weight=0.,
+                 critic_iter_num=5,
                  critic_relu_mlp=False,
                  critic_use_bn=True,
                  minmax_resample=True,
@@ -275,8 +292,6 @@ class Generator(Algorithm):
         self._amortize_vi = amortize_vi
         self._use_pinverse = use_pinverse
 
-        self.z2 = None
-        
         if entropy_regularization == 0:
             self._grad_func = self._ml_grad
         else:
@@ -290,13 +305,11 @@ class Generator(Algorithm):
                 if functional_gradient:
                     self._grad_func = self._svgd_grad3_functional
                     if use_pinverse:
-                        self.pinverse = PinverseNet(
-                            output_dim,
-                            output_dim,
-                            64)
-
-                        self.pinverse_optimizer = torch.optim.Adam(
-                            self.pinverse.parameters(), lr=1e-4)
+                        self._pinverse_resolve = pinverse_resolve
+                        if not pinverse_resolve:
+                            self.pinverse = PinverseNet(output_dim, 64)
+                            self.pinverse_optimizer = torch.optim.Adam(
+                                self.pinverse.parameters(), lr=1e-3)
 
                 else:
                     self._grad_func = self._svgd_grad3
@@ -679,22 +692,63 @@ class Generator(Algorithm):
 
         return loss, loss_propagated
 
-    def pinverse_fn(self, jac, eps, z, zs):
-        """Input shapes:
-            Jac (torch.tensor) of size [B2, D, D]
-            eps (torch.tensor) of size [B2, B, D]
-            z (torch.tensor) of size [B, D]
+    def pinverse_fn(self, jac, eps, z):
+        """Solves for an approximation of
+            :math:`(\partial f / \partial z')^{-1} * \nabla_{z'}k(z', z)`
+            where the first term is given by ``jac``, and the second term
+            is given by ``eps``. 
+
+            Args: 
+                Jac (torch.tensor) of size [B2, D, D]
+                eps (torch.tensor) of size [B2, B, D]
+                z (torch.tensor) of size [B2, D]
+            
+            Returns:
+                :math:`(\partial f / \partial z')^{-1} * \nabla_{z'}k(z', z)`:
+                    (torch.tensor) of size [B2, B, D]
         """
-        assert self.pinverse is not None, "must init pinverse and its optimizer"
-        for iter in range(1):
-            p = self.pinverse(eps.detach(), z.detach(), zs.detach())
+        b2_dim, b_dim, d_dim = eps.shape
+        if self.pinverse_resolve:
+            pinverse = torch.randn(b2_dim, b1_dim, d_dim, requires_grad=True)
+            torch.nn.init.orthogonal_(pinverse)
+            pinverse_optimizer = torch.optim.Adam([pinverse], lr=1e-3)
+        else:
+            pinverse_optimizer = self.pinverse_optimizer
+
+        """ Unused, staged for deletion, but should be documented in this commit
+        Biconjugate gradient approach -- too slow
+
+        pinverse = []
+        jac = torch.repeat_interleave(jac, b1_dim, dim=1)
+        jac = jac.view(-1, d_dim, d_dim)
+        eps = eps.view(-1, d_dim)
+        
+        for i in range(b2_dim*b1_dim):
+            A = jac[i].detach().cpu().numpy()
+            b = eps[i].detach().cpu().numpy()
+            p, exitCode = bicgstab(A, b, maxiter=5)  # [D]
+            if exitCode != 0:
+                pass
+            pinverse.append(torch.from_numpy(p))
+        pinverse = torch.stack(pinverse).to(alf.get_default_device())  # [B, D]
+        pinverse = pinverse.view(b2_dim, b1_dim, d_dim)  # [B2, B, D]
+        return pinverse
+        """
+        loss = 1.0
+        while loss > 1e-3:
+            if not self.pinverse_resolve:
+                p = self.pinverse(eps.detach(), z.detach(), z2.detach())
+            else:
+                p = pinverse
             jac_y = torch.einsum('ijk,iak->iaj', jac.detach(), p)
             loss = torch.nn.functional.mse_loss(jac_y, eps.detach())
 
-            self.pinverse_optimizer.zero_grad()
+            pinverse_optimizer.zero_grad()
             loss.backward()
-            self.pinverse_optimizer.step()
-        return p
+            pinverse_optimizer.step()
+        if not resolve_pinverse:
+            pinverse = self.pinverse(eps.detach(), z.detach(), z2.detach())
+        return pinverse
 
     def _svgd_grad3_functional(self,
                                inputs,
@@ -703,14 +757,15 @@ class Generator(Algorithm):
                                entropy_regularization,
                                transform_func=None):
         """
-        Compute particle gradients via SVGD, empirical expectation
-        evaluated by resampled particles of the same batch size. 
+        Compute gradient of particle generator via SVGD, empirical expectation
+        evaluated by a resampling from the z space of the same batch size. 
         Args:
             inputs: None
             outputs (torch.tensor) of size [N, D], with N parameter sets of size D
                 output of ReluMLP
             loss_func (callable)
             entropy_regularization (float): tradeoff parameter
+            transform_func (not used)
 
         """
         assert inputs is None, '"svgd3" does not support conditional generator'
@@ -764,8 +819,9 @@ class Generator(Algorithm):
                                    loss_grad) / num_particles  # [N, D]
         
         grad = kernel_logp - entropy_regularization * kernel_grad.mean(0)
-        loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)# + 1e-3*(jac2_fz.norm()**2)
-
+        jac_reg = 1e-3 * jac2_fz.norm(keepdim=True).pow(2).mean()
+        loss_svgd = torch.sum(grad.detach() * outputs, dim=1)
+        loss_propagated = loss_svgd + jac_reg
         return loss, loss_propagated
 
     
@@ -810,17 +866,15 @@ class Generator(Algorithm):
         eps = torch.randn_like(fx)
         jvp = torch.autograd.grad(
             fx, x, grad_outputs=eps, retain_graph=True, create_graph=True)[0]
-        if eps.shape[-1] == jvp.shape[-1]:
-            tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
-        else:
-            tr_jvp = torch.einsum('bi,bj->b', jvp, eps)
+        assert eps.shape[-1] == jvp.shape[-1]
+        tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
         return tr_jvp
 
     def _critic_train_step(self, inputs, loss_func, entropy_regularization=1.):
         """
         Compute the loss for critic training.
         """
-        inputs, _ = inputs
+        #inputs, _ = inputs
         loss = loss_func(inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss

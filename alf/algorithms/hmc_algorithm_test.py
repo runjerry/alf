@@ -26,6 +26,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from scipy.stats import entropy
 import matplotlib.cm as cm
+import seaborn as sns
 
 
 class BNN(nn.Module):
@@ -185,30 +186,26 @@ class HMCTest(alf.test.TestCase):
         return (x_train, y_train), (x_test, y_test)
     
     def plot_bnn_regression(self, bnn_preds, data):
+        sns.set_style('darkgrid')
         gt_x = torch.linspace(-6, 6, 500).view(-1, 1).cpu()
         gt_y = -(1+gt_x) * torch.sin(1.2*gt_x) 
-        gt_y += torch.ones_like(gt_x).normal_(0, 0.04).cpu()
+        #gt_y += torch.ones_like(gt_x).normal_(0, 0.04).cpu()
         (x_train, y_train), (x_test, y_test) = data
         x_test = x_test.cpu().numpy()
         x_train = x_train.cpu().numpy()
         bnn_preds = bnn_preds.cpu()
+        mean = bnn_preds.mean(0).squeeze()
+        std = bnn_preds.std(0).squeeze()
         print (x_test.shape, bnn_preds.shape)
-        plt.plot(x_test, bnn_preds[:].numpy().squeeze().T,
-            'C0',alpha=0.01)
-        plt.plot(x_test, bnn_preds.mean(0).squeeze().T, color='b',
-            label='posterior mean', alpha=0.9)
-        plt.plot(x_test,
-            bnn_preds.mean(0).squeeze().T+2*bnn_preds.std(0).squeeze().T,
-            'C1',alpha=0.8, linewidth=3)
-        plt.plot(x_test,
-            bnn_preds.mean(0).squeeze().T-2*bnn_preds.std(0).squeeze().T,
-            'C1',alpha=0.8,linewidth=3)
-        plt.scatter(x_train, y_train.cpu().numpy(),color='g', label='train pts',
-            alpha=0.6)
-        plt.plot(gt_x, gt_y, color='r', label='ground truth')
+
+        plt.fill_between(x_test.squeeze(), mean.T+2*std.T, mean.T-2*std.T, alpha=0.5)
+        plt.plot(gt_x, gt_y, color='red', label='ground truth')
+        plt.plot(x_test, mean.T, label='posterior mean', alpha=0.9)
+        plt.scatter(x_train, y_train.cpu().numpy(),color='r', marker='+',
+            label='train pts', alpha=1.0, s=50)
         plt.legend(fontsize=14, loc='best')
         plt.ylim([-6, 8])
-        plt.savefig('plots/hmc_bnn.png')
+        plt.savefig('plots/hmc_bnn_ss0005.png')
         plt.close('all')
 
     def test_BayesianNNRegression(self):
@@ -224,11 +221,11 @@ class HMCTest(alf.test.TestCase):
         for p in net.parameters():
             tau_list.append(tau)
         tau_list = torch.tensor(tau_list)
-        step_size = 0.002
-        num_samples = 10000
-        burn_in_steps= 9800
+        step_size = 0.0005
+        num_samples = 1000
+        burn_in_steps=0
         steps_per_sample = 25
-        tau_out = .1
+        tau_out = 100.
         print ('HMC: Fitting BNN to regression data')
         algorithm = HMC(
             params=params_init,
@@ -255,10 +252,24 @@ class HMCTest(alf.test.TestCase):
             print ('Expected MSE: {}'.format(
                 ((preds.mean(0) - test_labels)**2).mean()))
             return preds
-
-        #hmc_params = _train()
-        #bnn_preds = _test(hmc_params)
-        #self.plot_bnn_regression(bnn_preds, (train_samples, test_samples))
+        
+        params = []
+        if False:
+            for i in range(10):
+                hmc_params = _train()
+                params = torch.stack(hmc_params).detach().cpu().numpy()
+                np.save('plots/hmc/trial_ss0005/hmc_regression_params_{}.npy'.format(i), _params)
+                #_params = np.load('plots/hmc/trial10k/hmc_regression_params_{}.npy'.format(i))
+                params.append(torch.from_numpy(_params))
+        
+        params = _train()
+        params = torch.stack(params)
+        print (params.shape)
+        #params = params[:, ::100, :]
+        hmc_params = params.reshape(-1, 151).cuda()[-4000:]
+        #hmc_params = hmc_params[::25]
+        bnn_preds = _test(hmc_params)
+        self.plot_bnn_regression(bnn_preds, (train_samples, test_samples))
     
     def generate_class_data(self,
         n_samples=100,
@@ -366,18 +377,18 @@ class HMCTest(alf.test.TestCase):
             print ('Expected XE loss: {}'.format(
                 F.cross_entropy(preds.mean(0), test_labels).mean()))
             return preds
-        
+        """
         for i in range(89, 90):
             #hmc_params = _train()
             #from sklearn.manifold import MDS
             #mds = MDS(n_components=2)
-            import glob
-            hmc_data = []
-            paths = glob.glob('hmc_runs/*')
-            for path in paths:
-                arr = np.load(path)
-                hmc_data.append(torch.from_numpy(arr))
-            hmc_params = torch.stack(hmc_data)[:, ::100, :].reshape(-1, 184).cuda()
+            #import glob
+            #hmc_data = []
+            #paths = glob.glo  b('hmc_runs/*')
+            #for path in paths:
+            #    arr = np.load(path)
+            #    hmc_data.append(torch.from_numpy(arr))
+            #hmc_params = torch.stack(hmc_data)[:, ::100, :].reshape(-1, 184).cuda()
 
             #_params = torch.stack(hmc_params).detach().cpu().numpy()
             #_parmas = _params[::25]
@@ -393,7 +404,7 @@ class HMCTest(alf.test.TestCase):
             with torch.no_grad():
                 self.plot_bnn_classification(num_samples, algorithm, hmc_params,
                 'entropy', 'hmc_2means_l50_cmap')
-        
+        """
     def cov(self, data, rowvar=False):
         """Estimate a covariance matrix given data.
 

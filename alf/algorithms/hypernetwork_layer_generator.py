@@ -34,7 +34,6 @@ class ParamLayers(Algorithm):
             last_layer_param,
             last_activation,
             use_bias=False,
-            use_relu_mlp=False,
             hidden_layers=(100, 100),
             activation=torch.nn.ReLU,
             use_fc_bn=False,
@@ -92,7 +91,6 @@ class ParamLayers(Algorithm):
 
         self._hidden_layers = hidden_layers
         self._use_fc_bn = use_fc_bn
-        self._use_relu_mlp = use_relu_mlp
 
         assert (callable(activation)
                 or activation is None), ("Activation must be an callable "\
@@ -167,20 +165,13 @@ class ParamLayers(Algorithm):
             size = input_dim * last_layer_w + bias
             layer_size.append(size)
         
-        if self._use_relu_mlp:
-            self.layer_encoders = nn.ModuleList([ReluMLP(
-                self._noise_spec,
-                output_size=layer_size[i],
-                hidden_layers=self._hidden_layers,
-                name="LayerEncoder_{}".format(i)) for i in range(len(layer_size))])
-        else:
-            self.layer_encoders = nn.ModuleList([EncodingNetwork(
-                self._noise_spec,
-                fc_layer_params=self._hidden_layers,
-                use_fc_bn=self._use_fc_bn,
-                last_layer_size=layer_size[i],
-                last_activation=self._last_activation,
-                name="LayerEncoder_{}".format(i)) for i in range(len(layer_size))])
+        self.layer_encoders = nn.ModuleList([EncodingNetwork(
+            self._noise_spec,
+            fc_layer_params=self._hidden_layers,
+            use_fc_bn=self._use_fc_bn,
+            last_layer_size=layer_size[i],
+            last_activation=self._last_activation,
+            name="LayerEncoder_{}".format(i)) for i in range(len(layer_size))])
 
     def _convert_inputs_conv(self, inputs_conv):
         """ Helper fn. Converts the default input conv layer description from:
@@ -219,26 +210,7 @@ class ParamLayers(Algorithm):
         for layer in self._network:
             print (layer)
     
-    def f(self, inputs):
-        thetas = []
-        for i in range(len(self.layer_encoders)):
-            theta = self.layer_encoders[i](inputs=inputs)
-            thetas.append(theta[0])
-        x = torch.cat(thetas, dim=-1)
-        return x
-
-    def f_jac(self, inputs):
-        thetas = []
-        jac = []
-        for i in range(len(self.layer_encoders)):
-            (theta, jac_layer), _ = self.layer_encoders[i](inputs=inputs, requires_jac=True)
-            thetas.append(theta)
-            jac.append(jac_layer)
-        x = torch.cat(thetas, dim=-1)
-        jac = torch.cat(jac, dim=1)
-        return x, jac
-
-    def forward(self, inputs=None, requires_jac=False, training=True):
+    def forward(self, inputs=None, training=True):
         """ HyperNetwork Generator Core
         inputs:
             x (torch.tensor) [N, z_dim]:
@@ -251,17 +223,10 @@ class ParamLayers(Algorithm):
         """
         if inputs is None:
             inputs = torch.randn(self._particles, self._noise_dim)
-        z = self.f(inputs)
-        if requires_jac:
-            if self._use_relu_mlp:
-                z, jac = self.f_jac(inputs)
-            else:
-                jac = []
-                for input in inputs:
-                    input = input.unsqueeze(0)
-                    J = torch.autograd.functional.jacobian(self.f, input)
-                    jac.append(J[0, :, 0, :])
-                jac = torch.stack(jac)
-            z = (z, jac)
+        thetas = []
+        for i in range(len(self.layer_encoders)):
+            theta = self.layer_encoders[i](inputs=inputs)
+            thetas.append(theta[0])
+        z = torch.cat(thetas, dim=-1)
         return z, inputs
         
