@@ -1,18 +1,18 @@
 import alf.algorithms.hypernetwork_layer_algorithm
 
 # dataset config
-create_dataset.dataset_name='mnist'
+create_dataset.dataset_name='mnist_inlier'
 create_dataset.train_batch_size=50
 create_dataset.test_batch_size=100
 
 # Lenet for MNIST
 CONV_LAYER_PARAMS = ((6, 5, 1, 2, 2), (16, 5, 1, 0, 2), (120, 5, 1))
-# CONV_LAYER_PARAMS = ((6, 5, 1, 2, 4), (16, 5, 1, 0))
+#CONV_LAYER_PARAMS = ((6, 5, 1, 2, 4), (16, 5, 1, 0))
 FC_LAYER_PARAMS = ((84, True), )
-# FC_LAYER_PARAMS = ((144, True), )
-HIDDEN_LAYERS = (100, 100)
+#FC_LAYER_PARAMS = ((144, True), )
+HIDDEN_LAYERS = (128,512)
 
-hypernet/Adam.lr=1e-4
+hypernet/Adam.lr=1e-3
 hypernet/Adam.weight_decay=1e-4
 hypernet_critic/Adam.lr=1e-4
 hypernet_critic/Adam.weight_decay=1e-4
@@ -22,18 +22,25 @@ HyperNetwork.conv_layer_params = %CONV_LAYER_PARAMS
 HyperNetwork.fc_layer_params=%FC_LAYER_PARAMS
 HyperNetwork.hidden_layers=%HIDDEN_LAYERS
 HyperNetwork.num_particles=10
-HyperNetwork.noise_dim=256
+HyperNetwork.noise_dim=128
 
-HyperNetwork.parameterization = 'layer'
-HyperNetwork.par_vi = 'minmax'
+# HyperNetwork.parameterization = 'layer'
+# HyperNetwork.par_vi = 'minmax'
+# HyperNetwork.function_vi = True
+HyperNetwork.parameterization = 'network'
+HyperNetwork.par_vi = 'svgd3'
 HyperNetwork.loss_type = 'classification'
-HyperNetwork.function_vi = True
+HyperNetwork.function_vi = False
+HyperNetwork.functional_gradient = True
+HyperNetwork.use_pinverse = True
+HyperNetwork.square_jac = False
+HyperNetwork.pinverse_resolve = False
+HyperNetwork.pinverse_use_eps = True
+HyperNetwork.pinverse_solve_iters = 1
 HyperNetwork.function_bs = 50
 HyperNetwork.optimizer=@hypernet/Adam()
 HyperNetwork.critic_optimizer=@hypernet_critic/Adam()
-HyperNetwork.critic_fc_bn = True
 HyperNetwork.critic_hidden_layers=(100,100)
-HyperNetwork.critic_train_iters=25
 HyperNetwork.logging_training=True
 HyperNetwork.logging_evaluate=True
 
@@ -48,7 +55,7 @@ TrainerConfig.algorithm_ctor=@HyperNetwork
 TrainerConfig.num_epochs=1000
 TrainerConfig.num_checkpoints=2
 TrainerConfig.evaluate=True
-TrainerConfig.eval_uncertainty=False
+TrainerConfig.eval_uncertainty=True
 TrainerConfig.eval_interval=1
 TrainerConfig.summary_interval=1
 TrainerConfig.debug_summaries=True

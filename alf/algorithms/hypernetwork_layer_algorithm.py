@@ -87,10 +87,17 @@ class HyperNetwork(SLAlgorithm):
                  function_vi=False,
                  functional_gradient=False,
                  use_pinverse=False,
+                 pinverse_use_eps=True,
+                 pinverse_type='network',
+                 pinverse_resolve=False,
+                 pinverse_solve_iters=1,
+                 use_jac_regularization=False,
+                 square_jac=True,
                  pinverse_batch_size=None,
                  optimizer=None,
                  critic_optimizer=None,
                  critic_hidden_layers=(100, 100),
+                 critic_l2_weight=0.,
                  function_bs=None,
                  function_space_samples=0,
                  logging_network=False,
@@ -229,13 +236,21 @@ class HyperNetwork(SLAlgorithm):
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
-            critic_input_dim=critic_input_dim,
-            critic_hidden_layers=critic_hidden_layers,
             functional_gradient=functional_gradient,
             use_pinverse=use_pinverse,
+            pinverse_type=pinverse_type,
+            pinverse_use_eps=pinverse_use_eps,
+            pinverse_resolve=pinverse_resolve,
+            pinverse_solve_iters=pinverse_solve_iters,
             pinverse_batch_size=pinverse_batch_size,
+            use_jac_regularization=use_jac_regularization,
+            square_jac = square_jac,
             amortize_vi=amortize_vi,
             optimizer=None,
+            critic_input_dim=critic_input_dim,
+            critic_relu_mlp=functional_gradient,
+            critic_hidden_layers=critic_hidden_layers,
+            critic_l2_weight=critic_l2_weight,
             critic_optimizer=critic_optimizer,
             name=name)
         
@@ -316,6 +331,7 @@ class HyperNetwork(SLAlgorithm):
         alf.summary.increment_global_counter()
         with record_time("time/train"):
             loss = 0.
+            pinverse_loss = 0
             if self._loss_type == 'classification':
                 avg_acc = []
             for batch_idx, (data, target) in enumerate(self._train_loader):
@@ -334,6 +350,7 @@ class HyperNetwork(SLAlgorithm):
 
                 if hasattr(loss_info.extra, 'generator'):
                     loss += loss_info.extra.generator.loss
+                    pinverse_loss += loss_info.extra.pinverse
                 else:
                     loss += loss_info.loss
                 if self._loss_type == 'classification':
@@ -348,6 +365,9 @@ class HyperNetwork(SLAlgorithm):
             if self._loss_type == 'classification':
                 logging.info("Avg acc: {}".format(acc))
             logging.info("Cum loss: {}".format(loss))
+            if pinverse_loss is not None:
+                pinverse_loss /= batch_idx
+                logging.info("Avg pinverse loss: {}".format(pinverse_loss))
         #self.summarize_train(loss_info, params, cum_loss=loss, avg_acc=acc)
         return batch_idx + 1
 
@@ -399,6 +419,8 @@ class HyperNetwork(SLAlgorithm):
         if self._use_fc_bn:
             self._generator.eval()
         params = self.sample_parameters(num_particles=num_particles)
+        if self._functional_gradient:
+            params, _ = params
         self._param_net.set_parameters(params)
         if self._use_fc_bn:
             self._generator.train()
@@ -409,7 +431,8 @@ class HyperNetwork(SLAlgorithm):
             for i, (data, target) in enumerate(self._test_loader):
                 data = data.to(alf.get_default_device())
                 target = target.to(alf.get_default_device())
-                output, _ = self._param_net(data)  # [B, N, D]
+                output, _ = self._param_net(data.double())  # [B, N, D]
+                #output, _ = self._param_net(data)  # [B, N, D]
                 loss, extra = self._vote(output, target)
                 if self._loss_type == 'classification':
                     test_acc += extra.item()
@@ -486,7 +509,8 @@ class HyperNetwork(SLAlgorithm):
         self._param_net.set_parameters(params)
         num_particles = params.shape[0]
         data, target = inputs
-        output, _ = self._param_net(data)  # [B, P, D]
+        output, _ = self._param_net(data.double())  # [B, P, D]
+        #output, _ = self._param_net(data)  # [B, P, D]
         target = target.unsqueeze(1).expand(*target.shape[:1], num_particles,
                                             *target.shape[1:])
         return self._loss_func(output, target)
@@ -497,6 +521,8 @@ class HyperNetwork(SLAlgorithm):
         if num_particles is None:
             num_particles = 100
         params = self.sample_parameters(num_particles=num_particles)
+        if self._functional_gradient:
+            params, _ = params
         if self._generator._par_vi == 'minmax':
             params = params[0]
         self._param_net.set_parameters(params)

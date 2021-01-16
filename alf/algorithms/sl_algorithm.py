@@ -419,7 +419,7 @@ class SLAlgorithm(Algorithm):
         for batch, (data, target) in enumerate(testset):
             data = data.to(alf.get_default_device())
             target = target.to(alf.get_default_device())
-            output, _ = self._net(data)
+            output, _ = self._net(data.double())
             if output.dim() == 2:
                 output = output.unsqueeze(1)
             output = output.transpose(0, 1)

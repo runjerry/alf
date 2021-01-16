@@ -100,10 +100,10 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                               #('svgd3', False, True), ('svgd3', True, True),
                               #('gfsf', False, False), ('gfsf', True, False),
                               #('gfsf', False, True), ('gfsf', True, True ),
-                              ('svgd3', False, True, True),
-                              ('svgd3', False, True, False),
-                              ('minmax', False, False, False),
-                              ('minmax', False, True, False),
+                              #('svgd3', False, True, False),
+                              #('svgd3', False, True, True),
+                              #('minmax', False, False, False),
+                              ('minmax', False, True, True),
     )
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
@@ -146,9 +146,11 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             lr = 1e-2
         if functional_gradient:
             hidden_layers = ()
+            parameterization = 'network'
         else:
             hidden_layers = None
-        parameterization = 'network'
+            parameterization = 'layer'
+
         algorithm = HyperNetwork(
             input_tensor_spec=input_spec,
             last_layer_param=(output_dim, False),
@@ -164,8 +166,13 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             function_vi=function_vi,
             function_bs=train_batch_size,
             function_space_samples=1,
+            use_pinverse=True,
+            pinverse_type='network',
+            pinverse_resolve=False,
+            pinverse_solve_iters=3,
             parameterization=parameterization,
             critic_hidden_layers=(hidden_size, hidden_size),
+            critic_l2_weight=5.0,
             optimizer=alf.optimizers.Adam(lr=lr),
             critic_optimizer=alf.optimizers.Adam(lr=lr))
         print("ground truth mean: {}".format(true_mean))
@@ -187,6 +194,9 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                 inputs=(train_inputs, train_targets),
                 entropy_regularization=entropy_regularization,
                 num_particles=num_particles)
+            if functional_gradient:
+                pinverse_loss = alg_step.info.extra.pinverse
+                if i % 500 == 0: print(pinverse_loss)
             
             if amortize or function_vi:
                 loss_info, params = algorithm.update_with_gradient(alg_step.info)

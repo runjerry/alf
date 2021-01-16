@@ -87,7 +87,7 @@ def zeros_from_spec(nested_spec, batch_size):
     """
 
     def _zero_tensor(spec):
-        return spec.zeros([batch_size])
+        return spec.zeros([batch_size]).double()
 
     param_spec = dist_utils.to_distribution_param_spec(nested_spec)
     params = nest.map_structure(_zero_tensor, param_spec)

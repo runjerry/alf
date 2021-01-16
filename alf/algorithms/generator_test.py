@@ -72,7 +72,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         #dict(entropy_regularization=1.0, par_vi='svgd3'),
         #dict(entropy_regularization=1.0, par_vi='minmax'),
         #dict(entropy_regularization=1.0, par_vi='svgd3', functional_gradient=True)
-        (1.0, 'minmax', True),
+        (1.0, 'minmax', False),
         (1.0, 'svgd3', True),
         dict(entropy_regularization=0.0),
         #dict(entropy_regularization=0.0, mi_weight=1),
