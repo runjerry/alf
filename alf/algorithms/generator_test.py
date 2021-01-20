@@ -66,20 +66,19 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         self.assertLessEqual(float(torch.max(abs(x - y))), eps)
 
     @parameterized.parameters(
-        #dict(entropy_regularization=1.0, par_vi='gfsf'),
-        #dict(entropy_regularization=1.0, par_vi='svgd'),
-        #dict(entropy_regularization=1.0, par_vi='svgd2'),
-        #dict(entropy_regularization=1.0, par_vi='svgd3'),
-        #dict(entropy_regularization=1.0, par_vi='minmax'),
-        #dict(entropy_regularization=1.0, par_vi='svgd3', functional_gradient=True)
-        (1.0, 'minmax', False),
-        (1.0, 'svgd3', True),
+        dict(entropy_regularization=1.0, par_vi='gfsf'),
+        dict(entropy_regularization=1.0, par_vi='svgd'),
+        dict(entropy_regularization=1.0, par_vi='svgd2'),
+        dict(entropy_regularization=1.0, par_vi='svgd3'),
+        dict(entropy_regularization=1.0, par_vi='svgd3', functional_gradient=True),
+        dict(entropy_regularization=1.0, par_vi='minmax'),
+        dict(entropy_regularization=1.0, par_vi='minmax', functional_gradient=True),
         dict(entropy_regularization=0.0),
-        #dict(entropy_regularization=0.0, mi_weight=1),
+        dict(entropy_regularization=0.0, mi_weight=1),
     )
     def test_generator_unconditional(self,
                                      entropy_regularization=1.0,
-                                     par_vi=None,
+                                     par_vi='minmax',
                                      functional_gradient=False,
                                      mi_weight=None):
         r"""
@@ -104,7 +103,7 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
         else:
             net = Net(dim)
             critic_relu_mlp = False
-
+        print (par_vi)
         generator = Generator(
             dim,
             noise_dim=noise_dim,
@@ -155,8 +154,8 @@ class GeneratorTest(parameterized.TestCase, alf.test.TestCase):
 
     @parameterized.parameters(
         dict(entropy_regularization=1.0),
-        #dict(entropy_regularization=0.0),
-        #dict(entropy_regularization=0.0, mi_weight=1),
+        dict(entropy_regularization=0.0),
+        dict(entropy_regularization=0.0, mi_weight=1),
     )
     def test_generator_conditional(self,
                                    entropy_regularization=0.0,

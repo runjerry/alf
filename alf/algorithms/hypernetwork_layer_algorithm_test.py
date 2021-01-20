@@ -21,7 +21,6 @@ import alf
 from alf.algorithms.config import TrainerConfig
 from alf.data_structures import LossInfo
 from alf.algorithms.hypernetwork_layer_algorithm import HyperNetwork
-from alf.algorithms.hypernetwork_networks import ParamConvNet, ParamNetwork
 from alf.tensor_specs import TensorSpec
 from alf.utils import math_ops, datagen
 
@@ -65,50 +64,19 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertEqual(x.shape, y.shape)
         self.assertGreater(float(torch.min(x - y)), eps)
 
-    def plot_predictions(self, inputs, targets, computed_preds, step):
-        fig, ax = plt.subplots(1)
-        fig.suptitle("Bayes Linear Regression Predictions")
-        inputs = inputs.cpu().numpy()
-        targets = targets.cpu().numpy()
-        computed_preds = computed_preds.cpu().detach().numpy()
-        ax.scatter(targets, np.zeros_like(targets), color='r', label='targets')
-        ax.scatter(computed_preds, np.zeros_like(targets), color='g', label='computed')
-        plt.legend(loc='best')
-        plt.grid(True)
-        plt.savefig('predictions_step_{}.png'.format(step))
-        # plt.show()
-        plt.close('all')
-
-    def plot_cov_heatmap(self, true_cov, computed_cov, learned_cov, step):
-        fig, ax = plt.subplots(3)
-        fig.suptitle("Bayes Linear Regression Covariance Heatmap")
-        true_cov = true_cov.cpu().numpy()
-        computed_cov = computed_cov.cpu().numpy()
-        learned_cov = learned_cov.cpu().detach().numpy()
-        ax[0].set_title('True Covariance')
-        sns.heatmap(true_cov, ax=ax[0])
-        ax[1].set_title('Hypernet Analytic Covariance')
-        sns.heatmap(computed_cov, ax=ax[1])
-        ax[2].set_title('Hypernet Learned Covariance')
-        sns.heatmap(learned_cov, ax=ax[2])
-        plt.tight_layout()
-        plt.savefig('cov_heatmap_step_{}'.format(step))
-        # plt.show()
-        plt.close('all')
-
     @parameterized.parameters(
-                              #('svgd3', False, True), ('svgd3', True, True),
-                              #('gfsf', False, False), ('gfsf', True, False),
-                              #('gfsf', False, True), ('gfsf', True, True ),
-                              #('svgd3', False, True, False),
-                              #('svgd3', False, True, True),
-                              #('minmax', False, False, False),
-                              ('minmax', False, True, True),
+                              #('gfsf', False, False),  #A-GFSF
+                              #('gfsf', True, False),  #A-GFSF-fv
+                              #('svgd3', False, False), # A-SVGD
+                              #('svgd3', True, False),  #A-SVGD-fv
+                              #('svgd3', False, True), #G-SVGD
+                              #('minmax', False, False), #A-minmax
+                              ('minmax', True, False),  #A-minmax-fv
+                              #('minmax', False, True),  #G-minmax
     )
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
                                         function_vi=False,
-                                        amortize=True,
                                         functional_gradient=False,
                                         train_batch_size=10,
                                         num_particles=512):
@@ -125,8 +93,8 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         """
 
         print ("Testing {} with {} particles".format(par_vi, num_particles))
-        print ("Amortize: {}, \nFunction values: {}, \nFunctional gradient: {}".format(
-            amortize, function_vi, functional_gradient))
+        print ("Function values: {}, \nFunctional gradient: {}".format(
+            function_vi, functional_gradient))
         input_size = 3
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
@@ -140,10 +108,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         true_cov = torch.inverse(inputs.t() @ inputs) 
         true_mean = true_cov @ inputs.t() @ targets
         noise_dim = input_size
-        if amortize is True:
-            lr = 1e-3
-        else:
-            lr = 1e-2
+        lr = 1e-3
         if functional_gradient:
             hidden_layers = ()
             parameterization = 'network'
@@ -152,7 +117,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             parameterization = 'layer'
 
         algorithm = HyperNetwork(
-            input_tensor_spec=input_spec,
+            input_spec,
             last_layer_param=(output_dim, False),
             last_activation=math_ops.identity,
             noise_dim=noise_dim,
@@ -160,19 +125,17 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             loss_type='regression',
             par_vi=par_vi,
             num_particles=num_particles,
-            amortize_vi=amortize,
             functional_gradient=functional_gradient,
-            particle_optimizer=alf.optimizers.Adam(lr=lr),
             function_vi=function_vi,
             function_bs=train_batch_size,
-            function_space_samples=1,
             use_pinverse=True,
             pinverse_type='network',
             pinverse_resolve=False,
-            pinverse_solve_iters=3,
+            pinverse_solve_iters=20,
             parameterization=parameterization,
             critic_hidden_layers=(hidden_size, hidden_size),
-            critic_l2_weight=5.0,
+            critic_iter_num=5,
+            critic_l2_weight=1.0,
             optimizer=alf.optimizers.Adam(lr=lr),
             critic_optimizer=alf.optimizers.Adam(lr=lr))
         print("ground truth mean: {}".format(true_mean))
@@ -194,46 +157,41 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                 inputs=(train_inputs, train_targets),
                 entropy_regularization=entropy_regularization,
                 num_particles=num_particles)
+            
             if functional_gradient:
                 pinverse_loss = alg_step.info.extra.pinverse
-                if i % 500 == 0: print(pinverse_loss)
+                if i % 500 == 0: 
+                    print(pinverse_loss)
             
-            if amortize or function_vi:
-                loss_info, params = algorithm.update_with_gradient(alg_step.info)
-            else:
-                update_direction = alg_step.info.loss
-                algorithm._particle_optimizer.zero_grad()
-                algorithm._params.grad = update_direction
-                algorithm._particle_optimizer.step()
+            loss_info, params = algorithm.update_with_gradient(alg_step.info)
         
-        def _test(i, sampled_predictive=True):
+        def _test(i, sampled_predictive=False):
 
             print("-" * 68)
-            if amortize:
-                if parameterization == 'layer':
-                    weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
-                    learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
-                else:
-                    weight = algorithm._generator._net._fc_layers[0].weight
-                    learned_mean = algorithm._generator._net._fc_layers[0].bias
+            if parameterization == 'layer':
+                weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
+                learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
+            else:
+                weight = algorithm._generator._net._fc_layers[0].weight
+                learned_mean = algorithm._generator._net._fc_layers[0].bias
 
-                learned_cov = weight @ weight.t()
-                print("norm of generator weight: {}".format(weight.norm()))
-                print("norm of learned cov: {}".format(learned_cov.norm()))
-               
-                predicts = inputs @ learned_mean  # [batch]
-                pred_err = torch.norm(predicts - targets.squeeze())
+            learned_cov = weight @ weight.t()
+            print("norm of generator weight: {}".format(weight.norm()))
+            print("norm of learned cov: {}".format(learned_cov.norm()))
+           
+            predicts = inputs @ learned_mean  # [batch]
+            pred_err = torch.norm(predicts - targets.squeeze())
 
-                mean_err = torch.norm(learned_mean - true_mean.squeeze())
-                mean_err = mean_err / torch.norm(true_mean)
+            mean_err = torch.norm(learned_mean - true_mean.squeeze())
+            mean_err = mean_err / torch.norm(true_mean)
 
-                cov_err = torch.norm(learned_cov - true_cov)
-                cov_err = cov_err / torch.norm(true_cov)
-                
-                print("Train Iter: {}".format(i))
-                print("\tpred err {}".format(pred_err))
-                print("\tmean err {}".format(mean_err))
-                print("\tcov err {}".format(cov_err))
+            cov_err = torch.norm(learned_cov - true_cov)
+            cov_err = cov_err / torch.norm(true_cov)
+            
+            print("Train Iter: {}".format(i))
+            print("\tpred err {}".format(pred_err))
+            print("\tmean err {}".format(mean_err))
+            print("\tcov err {}".format(cov_err))
 
             if sampled_predictive:
                 params = algorithm.sample_parameters(num_particles=200)
@@ -257,42 +215,28 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                 scov_err = scov_err / torch.norm(true_cov)
                 print("train_iter {}: sampled cov err {}".format(i, scov_err))
 
-            self.plot_predictions(inputs, targets, predicts, i)
-            self.plot_cov_heatmap(true_cov, computed_cov, learned_cov, i)
-        
         train_iter = 10000
         for i in range(train_iter):
             _train(i)
             if i % 1000 == 0:
                 _test(i)
 
-        if amortize:
-            if parameterization == 'layer':
-                weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
-                learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
-            else:
-                weight = algorithm._generator._net._fc_layers[0].weight
-                learned_mean = algorithm._generator._net._fc_layers[0].bias
-            mean_err = torch.norm(learned_mean - true_mean.squeeze())
-            mean_err = mean_err / torch.norm(true_mean)
-            learned_cov = weight @ weight.t()
-            cov_err = torch.norm(learned_cov - true_cov)
-            cov_err = cov_err / torch.norm(true_cov)
-            print("-" * 68)
-            print("train_iter {}: mean err {}".format(train_iter, mean_err))
-            print("train_iter {}: cov err {}".format(train_iter, cov_err))
-            self.assertLess(mean_err, 0.5)
-            self.assertLess(cov_err, 0.5)
+        if parameterization == 'layer':
+            weight = algorithm._generator._net.layer_encoders[0]._fc_layers[0].weight
+            learned_mean = algorithm._generator._net.layer_encoders[0]._fc_layers[0].bias
         else:
-            params = algorithm.sample_parameters()
-            smean_err = torch.norm(params.mean(0) - true_mean.squeeze())
-            smean_err = smean_err / torch.norm(true_mean)
-            scov_err = torch.norm(self.cov(params) - true_cov)
-            scov_err = scov_err / torch.norm(true_cov)
-            print("train_iter {}: sampled mean err {}".format(i, smean_err))
-            print("train_iter {}: sampled cov err {}".format(i, scov_err))
-            self.assertLess(smean_err, 0.5)
-            self.assertLess(scov_err, 0.5)
+            weight = algorithm._generator._net._fc_layers[0].weight
+            learned_mean = algorithm._generator._net._fc_layers[0].bias
+        mean_err = torch.norm(learned_mean - true_mean.squeeze())
+        mean_err = mean_err / torch.norm(true_mean)
+        learned_cov = weight @ weight.t()
+        cov_err = torch.norm(learned_cov - true_cov)
+        cov_err = cov_err / torch.norm(true_cov)
+        print("-" * 68)
+        print("train_iter {}: mean err {}".format(train_iter, mean_err))
+        print("train_iter {}: cov err {}".format(train_iter, cov_err))
+        self.assertLess(mean_err, 0.5)
+        self.assertLess(cov_err, 0.5)
 
 
 if __name__ == "__main__":

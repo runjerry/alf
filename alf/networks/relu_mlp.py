@@ -45,7 +45,7 @@ class SimpleFC(nn.Linear):
         super().__init__(input_size, output_size, bias=bias)
         self._activation = activation
         self._hidden_neurons = None
-        torch.nn.init.orthogonal_(self.weight)
+        # torch.nn.init.orthogonal_(self.weight)
 
     @property
     def hidden_neurons(self):
@@ -86,7 +86,12 @@ class ReluMLP(Network):
         super().__init__(input_tensor_spec, name=name)
 
         self._input_size = input_tensor_spec.shape[0]
-        self._output_size = output_size
+        if output_size is None:
+            self._output_size = self._input_size
+        else:
+            self._output_size = output_size
+        
+        self._activation = activation
         self._hidden_layers = hidden_layers
         self._n_hidden_layers = len(hidden_layers)
 
@@ -119,9 +124,14 @@ class ReluMLP(Network):
         z = inputs
         for fc in self._fc_layers:
             z = fc(z)
+        
+        if self._activation == torch.relu_:
+            compute_jac_fn = self._compute_jac
+        else:
+            compute_jac_fn = self._compute_jac_f
 
         if requires_jac:
-            z = (z, self._compute_jac())#_f(inputs))
+            z = (z, compute_jac_fn())
         if requires_jac_diag:
             z = (z, self._compute_jac_diag())
 

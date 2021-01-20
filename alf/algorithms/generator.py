@@ -193,7 +193,7 @@ class PinverseNet(torch.nn.Module):
             x_joint = torch.cat((x_z, x_eps), dim=-1)
             x = torch.nn.functional.relu(self.linear_joint(x_joint))
             x = torch.nn.functional.relu(self.linear_hidden(x))
-            output = self.linear_out(x).reshape(b2_dim, eps.shape[1], self.output_dim)
+            output = self.linear_out(x).reshape_as(eps)
 
         else:  # J^{-1}
             x_z = torch.nn.functional.relu(self.linear_z(z))
@@ -267,7 +267,6 @@ class Generator(Algorithm):
                  mi_weight=None,
                  mi_estimator_cls=MIEstimator,
                  par_vi=None,
-                 amortize_vi=True,
                  functional_gradient=False,
                  use_pinverse=False,
                  pinverse_type='network',
@@ -279,8 +278,8 @@ class Generator(Algorithm):
                  square_jac=True,
                  critic_input_dim=None,
                  critic_hidden_layers=(100, 100),
-                 critic_l2_weight=0.,
-                 critic_iter_num=5,
+                 critic_l2_weight=10.,
+                 critic_iter_num=2,
                  critic_relu_mlp=False,
                  critic_use_bn=True,
                  minmax_resample=True,
@@ -334,7 +333,6 @@ class Generator(Algorithm):
         self._entropy_regularization = entropy_regularization
         self._par_vi = par_vi
         self._functional_gradient = functional_gradient
-        self._amortize_vi = amortize_vi
         self._use_pinverse = use_pinverse
 
         if entropy_regularization == 0:
@@ -384,14 +382,14 @@ class Generator(Algorithm):
                                 eps_dim = output_dim
                             elif par_vi == 'minmax':
                                 eps_dim = output_dim * output_dim
-                            self.pinverse = PinverseNet(output_dim, output_dim, 100,
+                            self.pinverse = PinverseNet(output_dim, eps_dim, 100,
                                 eps_dim=eps_dim)
                         else:
                             if pinverse_use_eps:
-                                self.pinverse = PinverseNet(noise_dim, output_dim, 100,
+                                self.pinverse = PinverseNet(noise_dim, output_dim, 10,
                                     eps_dim=noise_dim)
                             else:
-                                self.pinverse = PinverseNet(noise_dim, output_dim*noise_dim, 100,
+                                self.pinverse = PinverseNet(noise_dim, output_dim*noise_dim, 150,
                                     eps_dim=None)
                         self.pinverse_optimizer = torch.optim.Adam(
                             self.pinverse.parameters(), lr=1e-4, weight_decay=1e-5)
@@ -400,8 +398,8 @@ class Generator(Algorithm):
                         self.pinverse = None
                         self.pinverse_optimizer = None
 
-            self._kernel_width_averager = AdaptiveAverager(
-                tensor_spec=TensorSpec(shape=()))
+        self._kernel_width_averager = AdaptiveAverager(
+            tensor_spec=TensorSpec(shape=()))
 
         noise_spec = TensorSpec(shape=(noise_dim, ))
 
@@ -659,10 +657,10 @@ class Generator(Algorithm):
             mi_loss = mi_step.info.loss
             loss_propagated = loss_propagated + self._mi_weight * mi_loss
         
-        if self._use_pinverse:
+        if self._functional_gradient and self._use_pinverse:
             loss, pinverse_loss = loss
         else:
-            pinverse_loss = None
+            pinverse_loss = ()
         return AlgStep(
             output=outputs,
             state=(),
@@ -734,8 +732,7 @@ class Generator(Algorithm):
         h = self._kernel_width(dist_sq.view(-1))
 
         kappa = torch.exp(-dist_sq / h)  # [Nx, Nx]
-        kappa_grad = torch.einsum('ij,ijk->ijk', kappa,
-                                  -2 * diff / h)  # [Nx, Ny, D]
+        kappa_grad = kappa.unsqueeze(-1) * (-2 * diff / h)  # [Nx, Ny, D]
         return kappa, kappa_grad
 
     def _score_func(self, x, alpha=1e-5):
@@ -777,9 +774,9 @@ class Generator(Algorithm):
         evaluated by a single resampled particle. 
         """
         outputs2, _ = self._predict(inputs, batch_size=outputs.shape[0])
-        if transform_func is not None:
-            outputs = transform_func(outputs)
-            outputs2 = transform_func(outputs2)
+        assert transform_func is None, (
+            "function value based vi is not supported for svgd_grad")
+
         kernel_weight = self._rbf_func(outputs, outputs2)
         weight_sum = entropy_regularization * kernel_weight.sum()
 
@@ -811,23 +808,39 @@ class Generator(Algorithm):
         """
         assert inputs is None, '"svgd2" does not support conditional generator'
         if transform_func is not None:
-            outputs = transform_func(outputs)
+            outputs, extra_outputs, _ = transform_func(outputs)
+            aug_outputs = torch.cat([outputs, extra_outputs], dim=1)
+        else:
+            aug_outputs = outputs
         num_particles = outputs.shape[0] // 2
         outputs_i, outputs_j = torch.split(outputs, num_particles, dim=0)
+        aug_outputs_i, aug_outputs_j = torch.split(
+            aug_outputs, num_particles, dim=0)
+
         loss_inputs = outputs_j
         loss = loss_func(loss_inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss
         else:
             neglogp = loss
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs_j)[0]  # [Nj, D]
+        loss_grad = torch.autograd.grad(neglogp.sum(),
+                                        loss_inputs)[0]  # [Nj, D]
 
-        # [Nj, Ni], [Nj, Ni, D]
-        kernel_weight, kernel_grad = self._rbf_func2(outputs_j, outputs_i)
+        # [Nj, Ni], [Nj, Ni, D']
+        kernel_weight, kernel_grad = self._rbf_func2(aug_outputs_j.detach(),
+                                                     aug_outputs_i.detach())
         kernel_logp = torch.matmul(kernel_weight.t(),
                                    loss_grad) / num_particles  # [Ni, D]
-        grad = kernel_logp - entropy_regularization * kernel_grad.mean(0)
-        loss_propagated = torch.sum(grad.detach() * outputs_i, dim=-1)
+
+        loss_prop_kernel_logp = torch.sum(
+            kernel_logp.detach() * outputs_i, dim=-1)
+        loss_prop_kernel_grad = torch.sum(
+            -entropy_regularization * kernel_grad.mean(0).detach() *
+            aug_outputs_i,
+            dim=-1)
+
+        loss_propagated = loss_prop_kernel_logp + loss_prop_kernel_grad
+        
         return loss, loss_propagated
 
     def _svgd_grad3(self,
@@ -842,20 +855,15 @@ class Generator(Algorithm):
         """
         assert inputs is None, '"svgd3" does not support conditional generator'
         num_particles = outputs.shape[0]
-        gen_output_dim = outputs.shape[-1]
-
-        if self._amortize_vi:
-            outputs2, _ = self._predict(inputs, batch_size=num_particles)
-        else:
-            outputs2 = outputs.detach().requires_grad_(True)
-
+        outputs2, _ = self._predict(inputs, batch_size=num_particles)
         if transform_func is not None:
-            outputs, density_outputs = transform_func(outputs)
-            outputs2, density_outputs2 = transform_func(outputs2)
+            outputs, extra_outputs, samples = transform_func(outputs)
+            outputs2, extra_outputs2, _ = transform_func((outputs2, samples))
+            aug_outputs = torch.cat([outputs, extra_outputs], dim=-1)
+            aug_outputs2 = torch.cat([outputs2, extra_outputs2], dim=-1)
         else:
-            density_outputs = None
-            density_outputs2 = None
-
+            aug_outputs = outputs  # [N, D']
+            aug_outputs2 = outputs2  # [N2, D']
         loss_inputs = outputs2
         loss = loss_func(loss_inputs)
         if isinstance(loss, tuple):
@@ -863,38 +871,32 @@ class Generator(Algorithm):
         else:
             neglogp = loss
         
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs2)[0]  # [N2, D]
+        loss_grad = torch.autograd.grad(neglogp.sum(),
+                                        loss_inputs)[0]  # [N2, D]
         # [N2, N], [N2, N, D]
-        if density_outputs is not None:
-            n_perturbed = density_outputs.shape[1]
-            outputs = torch.cat((
-                outputs[:, :-n_perturbed], density_outputs), dim=-1)
-            outputs2 = torch.cat((
-                outputs2[:, :-n_perturbed], density_outputs2), dim=-1)
-        
-        kernel_weight, kernel_grad = self._rbf_func2(outputs2, outputs)
+        kernel_weight, kernel_grad = self._rbf_func2(aug_outputs2.detach(),
+                                                     aug_outputs.detach())
         kernel_logp = torch.matmul(kernel_weight.t(),
                                    loss_grad) / num_particles  # [N, D]
-        grad = kernel_logp - entropy_regularization * kernel_grad.mean(0)
-
-        if self._amortize_vi or (transform_func is not None):
-            loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
-        else:
-            loss_propagated = grad
+        loss_prop_kernel_logp = torch.sum(
+            kernel_logp.detach() * outputs, dim=-1)
+        loss_prop_kernel_grad = torch.sum(
+            -entropy_regularization * kernel_grad.mean(0).detach() *
+            aug_outputs,
+            dim=-1)
+        loss_propagated = loss_prop_kernel_logp + loss_prop_kernel_grad
 
         return loss, loss_propagated
 
-    def sor_fn(self, z2, z=None, eps=None, jac=None):
+    def sor_fn(self, z, eps=None, jac=None):
         if self._par_vi == 'svgd3':
             b2_dim, b_dim, d_dim = eps.shape
         else:
             b_dim, d_dim = eps.shape[1:]
-        if z is not None:
-            z = z.detach()
         if jac is None:  # require vjp
             jac = jac.detach()
             
-        z2 = z2.detach()
+        z = z.detach()
         eps = eps.detach()
 
         
@@ -907,7 +909,7 @@ class Generator(Algorithm):
             omega = .5
             for j_i, b_i, p_i in zip(jac, eps, self.pinverse):
                 residual = (torch.mm(j_i, p_i) - b_i).norm()
-                while residual > 1e-6:
+                for _ in range(self._pinverse_solve_iters):
                     for i in range(j_i.shape[0]):
                         sigma = 0
                         for j in range(j_i.shape[1]):
@@ -985,7 +987,7 @@ class Generator(Algorithm):
 
             pinverse_optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(pinverse.parameters(), 1.)
+            torch.nn.utils.clip_grad_norm_(pinverse.parameters(), 5.)
             pinverse_optimizer.step()
 
         if not self._pinverse_resolve:
@@ -1037,7 +1039,7 @@ class Generator(Algorithm):
         elif (self._noise_dim == z_shape) or (not self._square_jac):
             z = gen_inputs
             z2 = torch.randn(num_particles, self._noise_dim, requires_grad=True)
-            if not self._square_jac:
+            if self._square_jac:
                 outputs2, jac2_fz = self._net(z2, requires_jac=True)[0]  # f(z'), df/dz
             else:
                 outputs2 = self._net(z2)[0]  # f(z'), df/dz
@@ -1046,10 +1048,11 @@ class Generator(Algorithm):
         # [N2, N], [N2, N, D]
         kernel_weight, kernel_grad = self._rbf_func2(z2, z)
         if self._use_pinverse:        
-            kernel_grad, pinverse_loss = self.pinverse_fn(z2, kernel_grad, jac2_fz)
+            kernel_grad, pinverse_loss = self.pinverse_fn(z2.detach(), kernel_grad.detach(), jac2_fz.detach())
         else:
             jac2_inv = torch.inverse(jac2_fz)
             kernel_grad = torch.einsum('ijk, iaj->iak', jac2_inv, kernel_grad) # [N2, N, D]
+            pinverse_loss = ()
 
         loss_inputs = outputs2
         loss = loss_func(loss_inputs)
@@ -1080,39 +1083,35 @@ class Generator(Algorithm):
         """Compute particle gradients via GFSF (Stein estimator). """
         assert inputs is None, '"gfsf" does not support conditional generator'
         if transform_func is not None:
-            outputs, density_outputs = transform_func(outputs)
+            outputs, extra_outputs, _ = transform_func(outputs)
+            aug_outputs = torch.cat([outputs, extra_outputs], dim=-1)
         else:
-            density_outputs = None
+            aug_outputs = outputs
+        score_inputs = aug_outputs.detach()
         loss_inputs = outputs
         loss = loss_func(loss_inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss
         else:
             neglogp = loss
-
-        loss_grad = torch.autograd.grad(neglogp.sum(), outputs)[0]  # [N2, D]
-
-        if density_outputs is not None:
-            n_perturbed = density_outputs.shape[1]
-            outputs = torch.cat((
-                outputs[:, :-n_perturbed], density_outputs), dim=-1)
-
-        logq_grad = self._score_func(outputs)
-        grad = loss_grad + entropy_regularization * logq_grad
-        if self._amortize_vi or (transform_func is not None):
-            loss_propagated = torch.sum(grad.detach() * outputs, dim=-1)
-        else:
-            loss_propagated = grad
+        loss_grad = torch.autograd.grad(neglogp.sum(),
+                                        loss_inputs)[0]  # [N2, D]
+        logq_grad = self._score_func(score_inputs) * entropy_regularization
+        
+        loss_prop_neglogp = torch.sum(loss_grad.detach() * outputs, dim=-1)
+        loss_prop_logq = torch.sum(logq_grad.detach() * aug_outputs, dim=-1)
+        loss_propagated = loss_prop_neglogp + loss_prop_logq
 
         return loss, loss_propagated
 
     def _jacobian_trace(self, fx, x):
         """Hutchinson's trace Jacobian estimator O(1) call to autograd,
             used by "\"minmax\" method"""
+        assert fx.shape[-1] == x.shape[-1], (
+            "Jacobian is not square, no trace defined.")
         eps = torch.randn_like(fx)
         jvp = torch.autograd.grad(
             fx, x, grad_outputs=eps, retain_graph=True, create_graph=True)[0]
-        assert eps.shape[-1] == jvp.shape[-1]
         tr_jvp = torch.einsum('bi,bi->b', jvp, eps)
         return tr_jvp
 
@@ -1120,7 +1119,6 @@ class Generator(Algorithm):
         """
         Compute the loss for critic training.
         """
-        #inputs, _ = inputs
         loss = loss_func(inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss
@@ -1175,12 +1173,13 @@ class Generator(Algorithm):
         
         if self._use_pinverse:
             if self._square_jac:
-                grad_f, pinverse_loss = self.pinverse_fn(jac_fz, eps=jac_dz, z2=z)
+                grad_f, pinverse_loss = self.pinverse_fn(z.detach(), jac_dz.detach(), jac_fz.detach())
             else:
-                grad_f, pinverse_loss = self.pinverse_fn(jac_fz, eps=jac_dz, z2=noise)
+                grad_f, pinverse_loss = self.pinverse_fn(noise.detach(), jac_dz.detach(), jac_fz.detach())
         else:
             jac_inv = torch.inverse(jac_fz)  # likely [N, Din, Dout]
             grad_f = torch.bmm(jac_inv, jac_dz)#.sum(1)  # [N, D, D]
+            pinverse_loss = ()
 
         f_loss_grad = (loss_grad.detach() * outputs).sum(1, keepdim=True)  # [N]
         loss_stein = f_loss_grad.unsqueeze(-1) - entropy_regularization * grad_f  # [N]
@@ -1206,22 +1205,21 @@ class Generator(Algorithm):
             outputs, _ = transform_func(outputs)
         if isinstance(outputs, tuple):
             ((outputs, jac), gen_inputs) = outputs
-        z_shape = outputs.shape[-1]
+
         num_particles = outputs.shape[0]
-        pinverse_loss = None
 
         for i in range(self._critic_iter_num):
 
             if self._minmax_resample:
                 if self._functional_gradient:
-                    z = torch.randn(num_particles, z_shape)
+                    z = torch.randn(num_particles, outputs.shape[-1])
                     noise = z[:, :self._noise_dim]
                     critic_inputs, gen_inputs = self._predict(
-                        inputs, noise=noise, batch_size=num_particles, require_jac=True)
+                        inputs, noise=noise, batch_size=num_particles, requires_jac=True)
                     critic_inputs, jac = critic_inputs
                     gen_inputs = (z, noise)
                 else:
-                    critic_inputs, gen_inputs = self._predict(
+                    critic_inputs, _ = self._predict(
                         inputs, batch_size=num_particles)
 
                 if transform_func is not None:
@@ -1243,8 +1241,12 @@ class Generator(Algorithm):
         loss = loss_func(outputs.detach())
         critic_outputs = self._critic.predict_step(outputs.detach()).output
         loss_propagated = torch.sum(-critic_outputs.detach() * outputs, dim=-1)
+        if self._functional_gradient and self._use_pinverse:
+            loss = (loss, pinverse_loss)
+        else:
+            loss = (loss, ())
 
-        return (loss, pinverse_loss), loss_propagated
+        return loss, loss_propagated
 
     def after_update(self, training_info):
         if self._predict_net:

@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,43 @@ import torch
 
 import alf
 from alf.utils import math_ops
+
+
+def tensor_extend_new_dim(x, dim, n):
+    """Extending the tensor along a new dimension with a replica of n.
+    Args:
+        x (Tensor): tensor to be extended
+        dim (int): the value indicating the position of the newly
+            inserted dimension
+        n (int): the number of replica along dim
+    Returns:
+        the extended tensor. Its shape is (*x.shape[0:dim], n, *x.shape[dim:])
+    """
+    return x.unsqueeze(dim).expand(*x.shape[0:dim], n, *x.shape[dim:])
+
+
+def reverse_cumsum(x, dim):
+    """Perform cumsum in a reverse order along the dimension specified by dim.
+    Args:
+        x (Tensor): the tensor to compute the reverse cumsum on
+        dim (int): the value indicating the dimension along which to calculate
+            the reverse cumsum
+    Returns:
+        the reverse cumsumed tensor. It has the same shape as x.
+    """
+    return torch.flip(torch.cumsum(torch.flip(x, [dim]), dim), [dim])
+
+
+def reverse_cumprod(x, dim):
+    """Perform cumprod in a reverse order along the dimension specified by dim.
+    Args:
+        x (Tensor): the tensor to compute the reverse cumprod on
+        dim (int): the value indicating the dimension along which to calculate
+            the reverse cumprod
+    Returns:
+        the reverse cumprod tensor. It has the same shape as x.
+    """
+    return torch.flip(torch.cumprod(torch.flip(x, [dim]), dim), [dim])
 
 
 def tensor_extend(x, y):
@@ -233,3 +270,39 @@ def clip_by_norms(tensors, clip_norm, in_place=False):
     return alf.nest.map_structure(
         lambda t: clip_by_global_norm([t], clip_norm, in_place=in_place)[0]
         if t is not None else t, tensors)
+
+
+def cov(data, rowvar=False):
+    """Estimate a covariance matrix given data.
+
+    Args:
+        data (tensor): A 1-D or 2-D tensor containing multiple observations 
+            of multiple dimentions. Each row of ``mat`` represents a
+            dimension of the observation, and each column a single
+            observation.
+        rowvar (bool): If True, then each row represents a dimension, with
+            observations in the columns. Othewise, each column represents
+            a dimension while the rows contains observations.
+
+    Returns:
+        The covariance matrix
+    """
+    x = data.detach().clone()
+
+    if x.ndim > 3:
+        raise ValueError('data has more than 3 dimensions')
+    if x.ndim == 3:
+        fact = 1.0 / (x.shape[1] - 1)
+        x -= torch.mean(x, dim=1, keepdim=True)
+        x_t = x.permute(0, 2, 1)
+        out = fact * torch.bmm(x_t, x)
+    else:
+        if x.dim() < 2:
+            x = x.view(1, -1)
+        if not rowvar and x.size(0) != 1:
+            x = x.t()
+        fact = 1.0 / (x.shape[1] - 1)
+        x -= torch.mean(x, dim=1, keepdim=True)
+        out = fact * x.matmul(x.t()).squeeze()
+
+    return out

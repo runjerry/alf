@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from absl import logging
 from absl.testing import parameterized
 import torch
+import torch.nn as nn
 import numpy as np
 
 import alf
@@ -27,17 +29,24 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
         dict(n=2, act=torch.relu, use_bias=True, parallel_x=False),
         dict(n=2, act=torch.relu, use_bias=True, parallel_x=True),
         dict(n=2, act=torch.relu, use_bias=False, parallel_x=True),
+        dict(
+            n=2, act=torch.relu, use_bias=False, use_bn=True, parallel_x=True),
+        dict(
+            n=2, act=torch.relu, use_bias=False, use_ln=True, parallel_x=True),
     )
     def test_parallel_fc(self,
                          n=2,
                          act=math_ops.identity,
                          use_bias=True,
+                         use_bn=False,
+                         use_ln=False,
                          parallel_x=True):
         batch_size = 3
         x_dim = 4
         pfc = alf.layers.ParallelFC(
-            x_dim, 6, n=n, activation=act, use_bias=use_bias)
-        fc = alf.layers.FC(x_dim, 6, activation=act, use_bias=use_bias)
+            x_dim, 6, n=n, activation=act, use_bias=use_bias, use_bn=use_bn)
+        fc = alf.layers.FC(
+            x_dim, 6, activation=act, use_bias=use_bias, use_bn=use_bn)
 
         if parallel_x:
             px = torch.randn((batch_size, n, x_dim))
@@ -62,11 +71,14 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
         dict(n=2, act=torch.relu, use_bias=True, parallel_x=False),
         dict(n=2, act=torch.relu, use_bias=True, parallel_x=True),
         dict(n=2, act=torch.relu, use_bias=False, parallel_x=True),
+        dict(
+            n=2, act=torch.relu, use_bias=False, use_bn=True, parallel_x=True),
     )
     def test_parallel_conv(self,
                            n=2,
                            act=math_ops.identity,
                            use_bias=True,
+                           use_bn=False,
                            parallel_x=True):
         batch_size = 5
         in_channels = 4
@@ -79,6 +91,7 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
             kernel_size=3,
             n=n,
             activation=act,
+            use_bn=use_bn,
             use_bias=use_bias)
 
         conv = alf.layers.Conv2D(
@@ -86,6 +99,7 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
             out_channels=out_channels,
             kernel_size=3,
             activation=act,
+            use_bn=use_bn,
             use_bias=use_bias)
         if parallel_x:
             px = torch.randn((batch_size, n, in_channels, height, width))
@@ -110,11 +124,14 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
         dict(n=2, act=torch.relu, use_bias=True, parallel_x=False),
         dict(n=2, act=torch.relu, use_bias=True, parallel_x=True),
         dict(n=2, act=torch.relu, use_bias=False, parallel_x=True),
+        dict(
+            n=2, act=torch.relu, use_bias=False, use_bn=True, parallel_x=True),
     )
     def test_parallel_conv_transpose(self,
                                      n=2,
                                      act=math_ops.identity,
                                      use_bias=True,
+                                     use_bn=False,
                                      parallel_x=True):
         batch_size = 5
         in_channels = 4
@@ -127,6 +144,7 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
             kernel_size=3,
             n=n,
             activation=act,
+            use_bn=use_bn,
             use_bias=use_bias)
 
         convt = alf.layers.ConvTranspose2D(
@@ -134,6 +152,7 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
             out_channels=out_channels,
             kernel_size=3,
             activation=act,
+            use_bn=use_bn,
             use_bias=use_bias)
         if parallel_x:
             px = torch.randn((batch_size, n, in_channels, height, width))
@@ -151,6 +170,117 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
                 x = px
             y = convt(x)
             self.assertLess((y - py[:, i, :]).abs().max(), 1e-5)
+
+    @parameterized.parameters(
+        dict(batch_size=1, n=2, act=torch.relu, use_bias=True),
+        dict(batch_size=3, n=2, act=torch.relu, use_bias=True),
+        dict(batch_size=3, n=2, act=torch.relu, use_bias=False),
+    )
+    def test_param_fc(self,
+                      batch_size=1,
+                      n=2,
+                      act=math_ops.identity,
+                      use_bias=True):
+        input_size = 4
+        output_size = 5
+        pfc = alf.layers.ParamFC(
+            input_size, output_size, activation=act, use_bias=use_bias)
+        fc = alf.layers.FC(
+            input_size, output_size, activation=act, use_bias=use_bias)
+
+        # test param length
+        self.assertEqual(pfc.weight_length, fc.weight.nelement())
+        if use_bias:
+            self.assertEqual(pfc.bias_length, fc.bias.nelement())
+
+        # test non-parallel forward
+        fc.weight.data.copy_(pfc.weight[0])
+        if use_bias:
+            fc.bias.data.copy_(pfc.bias[0])
+        inputs = torch.randn(batch_size, input_size)
+        p_outs = pfc(inputs)
+        outs = fc(inputs)
+        self.assertLess((outs - p_outs).abs().max(), 1e-6)
+
+        # test parallel forward
+        weight = torch.randn(n, pfc.weight_length)
+        pfc.set_weight(weight)
+        weight = weight.view(n, output_size, input_size)
+        if use_bias:
+            bias = torch.randn(n, pfc.bias_length)
+            pfc.set_bias(bias)
+
+        n_inputs = inputs.unsqueeze(1).expand(batch_size, n, input_size)
+        p_outs = pfc(inputs)
+        p_n_outs = pfc(n_inputs)
+        self.assertLess((p_outs - p_n_outs).abs().max(), 1e-6)
+        for i in range(n):
+            fc.weight.data.copy_(weight[i])
+            if use_bias:
+                fc.bias.data.copy_(bias[i])
+            outs = fc(inputs)
+            self.assertLess((outs - p_outs[:, i, :]).abs().max(), 1e-6)
+
+    @parameterized.parameters(
+        dict(batch_size=1, n=2, act=torch.relu, use_bias=True),
+        dict(batch_size=3, n=2, act=torch.relu, use_bias=True),
+        dict(batch_size=3, n=2, act=torch.relu, use_bias=False),
+    )
+    def test_param_conv2d(self,
+                          batch_size=1,
+                          n=2,
+                          act=math_ops.identity,
+                          use_bias=True):
+        in_channels = 4
+        out_channels = 5
+        kernel_size = 3
+        height = 11
+        width = 11
+        pconv = alf.layers.ParamConv2D(
+            in_channels,
+            out_channels,
+            kernel_size,
+            activation=act,
+            use_bias=use_bias)
+        conv = alf.layers.Conv2D(
+            in_channels,
+            out_channels,
+            kernel_size,
+            activation=act,
+            use_bias=use_bias)
+
+        # test param length
+        self.assertEqual(pconv.weight_length, conv.weight.nelement())
+        if use_bias:
+            self.assertEqual(pconv.bias_length, conv.bias.nelement())
+
+        # test non-parallel forward
+        conv.weight.data.copy_(pconv.weight)
+        if use_bias:
+            conv.bias.data.copy_(pconv.bias)
+        image = torch.randn(batch_size, in_channels, height, width)
+        p_outs = pconv(image)
+        outs = conv(image)
+        self.assertLess((outs - p_outs).abs().max(), 1e-6)
+
+        # test parallel forward
+        weight = torch.randn(n, pconv.weight_length)
+        pconv.set_weight(weight)
+        weight = weight.view(n, out_channels, in_channels, kernel_size,
+                             kernel_size)
+        if use_bias:
+            bias = torch.randn(n, pconv.bias_length)
+            pconv.set_bias(bias)
+        images = image.repeat(1, n, 1, 1)
+        p_outs = pconv(image)
+        p_n_outs = pconv(images)
+        self.assertLess((p_outs - p_n_outs).abs().max(), 1e-6)
+        for i in range(n):
+            conv.weight.data.copy_(weight[i])
+            if use_bias:
+                conv.bias.data.copy_(bias[i])
+            outs = conv(image)
+            self.assertLess((outs - p_outs[:, i, :, :, :]).abs().max(), 1e-5)
 
     @parameterized.parameters(
         ("rbf", 8, 8, 0.1),
@@ -203,7 +333,7 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
             if basis_type == "poly" or basis_type == "cheb":
                 exp_factor = torch.arange(input_size).float()
                 basis_weight_expected = basis_weight_tau**exp_factor
-                self.assertTensorEqual(basis_weight, basis_weight_expected)
+                self.assertTensorClose(basis_weight, basis_weight_expected)
             elif basis_type == "haar":
                 exp_factor = torch.ceil(
                     torch.log2(torch.arange(input_size).float() + 1))
@@ -251,6 +381,152 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
             torch.mm(dec.weight, dec.weight.transpose(1, 0)),
             torch.eye(dec.weight.shape[0]),
             epsilon=1e-6)
+
+    def test_transformer_block_shift(self):
+        n = 32
+        m = 7
+        l = 2 * n - 1
+        d = 24
+        x = torch.rand(l, d)
+        y = alf.layers.TransformerBlock._shift(x, m)
+        for i in range(m):
+            for j in range(n):
+                self.assertEqual(y[i, j], x[n - 1 + i - j, :])
+
+    @parameterized.parameters(0, 1, 2, 3)
+    def test_transformer_block(self, task_type=2):
+        batch_size = 100
+        max_len = 32
+        d_model = 64
+        layers = [alf.layers.FC(4, d_model, torch.relu_)]
+        for i in range(2):
+            layers.append(
+                alf.layers.TransformerBlock(
+                    d_model=d_model,
+                    d_k=d_model,
+                    d_v=d_model,
+                    d_ff=d_model,
+                    num_heads=3,
+                    memory_size=max_len,
+                    positional_encoding='rel' if task_type >= 3 else 'abs'))
+        layers.append(alf.layers.FC(d_model, 1))
+        model = nn.Sequential(*layers)
+
+        def _get_batch_content_based(batch_size):
+            """
+            A simple memory task:
+            In the first half of the sequence x[n] (i, j < max_len // 2):
+                one of x[n, i, 0] (over i) is set to 1, which means type 0 value is x[n, i, 3]
+                one of x[n, j, 1] (over j) is set to 1, which means type 1 value is x[n, j, 3]
+            In the second half of the sequence (k >= max_len // 2)
+                x[n, k, type] = 1 means the desired result for y[n, k] is the value of the type
+            x[n, i, 2] is used for indicating whether i is at the second half or not.
+            This feature is not necessary for successfully train the task, but it
+            make the training much faster, which is required for a unittest.
+            """
+            x = torch.zeros(batch_size, max_len, 4)
+            x[:, :, 3] = torch.rand(batch_size, max_len)
+            # indicating second half
+            x[:, max_len // 2:, 2] = 1
+            index = torch.randint(max_len // 2, size=(batch_size, 2))
+            bindex = torch.arange(batch_size)
+            x[bindex, index[:, 0], 0] = 1
+            x[bindex, index[:, 1], 1] = 1
+            read_type = torch.randint(2, size=(batch_size, max_len // 2))
+            read_index = max_len // 2 + torch.arange(max_len // 2).unsqueeze(0)
+
+            bindex = bindex.unsqueeze(-1)
+            x[bindex, read_index, read_type] = 1
+            y = torch.zeros(batch_size, max_len)
+            y[bindex, read_index] = x[bindex, index[bindex, read_type], 3]
+            return x, y
+
+        def _get_batch_position_based(batch_size):
+            """
+            A simple memory task:
+            In the second half of the sequence (k >= max_len // 2)
+                x[n, k, type] = 1 means the desired result for y[n, k] is x[n, 4 + type, 3]
+            x[n, i, 2] is used for indicating whether i is at the second half or not.
+            """
+            x = torch.zeros(batch_size, max_len, 4)
+            x[:, :, 3] = torch.rand(batch_size, max_len)
+            # indicating second half
+            x[:, max_len // 2:, 2] = 1
+            read_type = torch.randint(2, size=(batch_size, max_len // 2))
+            read_index = max_len // 2 + torch.arange(max_len // 2).unsqueeze(0)
+            bindex = torch.arange(batch_size).unsqueeze(-1)
+            x[bindex, read_index, read_type] = 1
+            y = torch.zeros(batch_size, max_len)
+            y[bindex, read_index] = x[bindex, 4 + read_type, 3]
+            return x, y
+
+        def _get_batch_position_target(batch_size):
+            """
+            A simple memory task:
+            In the first half of the sequence x[n] (i, j < max_len // 2):
+                one of x[n, i, 0] (over i) is set to 1, which means type 0 is at location i
+                one of x[n, j, 1] (over j) is set to 1, which means type 1 is at location j
+            In the second half of the sequence (k >= max_len // 2)
+                x[n, k, type] = 1 means the desired result for y[n, k] is the location of the type
+            x[n, i, 2] is used for indicating whether i is at the second half or not.
+            """
+            x = torch.zeros(batch_size, max_len, 4)
+            #x[:, :, 3] = torch.rand(batch_size, max_len)
+            # indicating second half
+            x[:, max_len // 2:, 2] = 1
+            index = torch.randint(max_len // 2, size=(batch_size, 2))
+            bindex = torch.arange(batch_size)
+            x[bindex, index[:, 0], 0] = 1
+            x[bindex, index[:, 1], 1] = 1
+            read_type = torch.randint(2, size=(batch_size, max_len // 2))
+            read_index = max_len // 2 + torch.arange(max_len // 2).unsqueeze(0)
+
+            bindex = bindex.unsqueeze(-1)
+            x[bindex, read_index, read_type] = 1
+            y = torch.zeros(batch_size, max_len)
+            y[bindex, read_index] = index[bindex, read_type].to(torch.float32)
+            return x, y
+
+        def _get_batch_relative_position_based(batch_size):
+            """
+            A simple memory task:
+            In the second half of the sequence (k >= max_len // 2)
+                x[n, k, type] = 1 means the desired result for y[n, k] is x[n, k - 8 - type, 3]
+            x[n, i, 2] is used for indicating whether i is at the second half or not.
+            """
+            x = torch.zeros(batch_size, max_len, 4)
+            x[:, :, 3] = torch.rand(batch_size, max_len)
+            # indicating second half
+            x[:, max_len // 2:, 2] = 1
+            read_type = torch.randint(2, size=(batch_size, max_len // 2))
+            read_index = max_len // 2 + torch.arange(max_len // 2).unsqueeze(0)
+            bindex = torch.arange(batch_size).unsqueeze(-1)
+            x[bindex, read_index, read_type] = 1
+            y = torch.zeros(batch_size, max_len)
+            y[bindex, read_index] = x[bindex, read_index - 8 - read_type, 3]
+            return x, y
+
+        get_batch = [
+            _get_batch_content_based, _get_batch_position_based,
+            _get_batch_position_target, _get_batch_relative_position_based
+        ][task_type]
+
+        iters = [200, 500, 300, 500][task_type]
+        optimizer = torch.optim.Adam(list(model.parameters()), lr=1e-3)
+        for i in range(iters):
+            optimizer.zero_grad()
+            x, y = get_batch(batch_size)
+            pred = model(x).squeeze(-1)
+            loss = torch.mean((pred - y)**2)
+            logging.log_every_n(
+                logging.INFO,
+                "%s loss=%s" % (i, loss.detach().cpu().numpy()),
+                n=100)
+            loss.backward()
+            optimizer.step()
+
+        logging.info("loss=%s" % loss.detach().cpu().numpy())
+        self.assertLess(loss, 0.01)
 
 
 if __name__ == "__main__":
