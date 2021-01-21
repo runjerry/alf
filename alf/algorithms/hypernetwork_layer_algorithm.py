@@ -35,7 +35,6 @@ from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops, summary_utils
 from alf.utils.summary_utils import record_time
 
-
 HyperNetworkLossInfo = namedtuple("HyperNetworkLossInfo", ["loss", "extra"])
 
 
@@ -110,6 +109,7 @@ class HyperNetwork(Algorithm):
                  pinverse_type='network',
                  pinverse_resolve=False,
                  pinverse_solve_iters=1,
+                 pinverse_optimizer=None,
                  use_jac_regularization=False,
                  square_jac=True,
                  parameterization='layer',
@@ -190,7 +190,7 @@ class HyperNetwork(Algorithm):
         assert parameterization in ['network', 'layer'], "Hypernetwork " \
                 "can only be parameterized by \"network\" or \"layer\" " \
                 "generators"
-        
+
         if parameterization == 'network':
             if functional_gradient:
                 net = ReluMLP(
@@ -252,7 +252,7 @@ class HyperNetwork(Algorithm):
         else:
             critic_input_dim = gen_output_dim
 
-        super().__init__(train_state_spec=(), optimizer=optimizer, name=name) 
+        super().__init__(train_state_spec=(), optimizer=optimizer, name=name)
 
         self._generator = Generator(
             gen_output_dim,
@@ -273,11 +273,12 @@ class HyperNetwork(Algorithm):
             pinverse_resolve=pinverse_resolve,
             pinverse_solve_iters=pinverse_solve_iters,
             pinverse_batch_size=pinverse_batch_size,
-            square_jac = square_jac,
+            pinverse_optimizer=pinverse_optimizer,
+            square_jac=square_jac,
             use_jac_regularization=use_jac_regularization,
             optimizer=None,
             name=name)
-        
+
         self._param_net = param_net
         self._num_particles = num_particles
         self._entropy_regularization = entropy_regularization
@@ -303,12 +304,11 @@ class HyperNetwork(Algorithm):
         else:
             raise ValueError("Unsupported loss_type: %s" % loss_type)
 
-
     def set_num_particles(self, num_particles):
         """Set the number of particles to sample through one forward
         pass of the hypernetwork. """
         self._num_particles = num_particles
-    
+
     @property
     def num_particles(self):
         return self._num_particles
@@ -321,10 +321,12 @@ class HyperNetwork(Algorithm):
             output, _ = self._generator._predict(batch_size=num_particles)
         else:
             output = self._generator.predict_step(
-            noise=noise, batch_size=num_particles, training=training).output
+                noise=noise, batch_size=num_particles,
+                training=training).output
         return output
 
-    def predict_step(self, inputs, params=None, num_particles=None, state=None):
+    def predict_step(self, inputs, params=None, num_particles=None,
+                     state=None):
         """Predict ensemble outputs for inputs using the hypernetwork model.
         
         Args:
@@ -344,7 +346,7 @@ class HyperNetwork(Algorithm):
         self._param_net.set_parameters(params)
         outputs, _ = self._param_net(inputs)
         return AlgStep(output=outputs, state=(), info=())
-     
+
     def train_iter(self, state=None):
         """ Perform a single (iteration) epoch of training"""
         assert self._train_loader is not None, "Must set data_loader first"
@@ -398,7 +400,7 @@ class HyperNetwork(Algorithm):
             num_particles = self._num_particles
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
-        
+
         if self._function_vi:
             data, target = inputs
             return self._generator.train_step(
@@ -416,7 +418,7 @@ class HyperNetwork(Algorithm):
                 batch_size=num_particles,
                 entropy_regularization=entropy_regularization,
                 state=())
-    
+
     def _function_transform(self, data, params):
         """
         Transform the generator outputs to its corresponding function values
@@ -541,15 +543,12 @@ class HyperNetwork(Algorithm):
             params = params[0]
         self._param_net.set_parameters(params)
         with torch.no_grad():
-            outputs = self._predict_dataset(
-                self._test_loader,
-                num_particles)
+            outputs = self._predict_dataset(self._test_loader, num_particles)
         probs = F.softmax(outputs, -1).mean(0)
         entropy = entropy_fn(probs.T.cpu().detach().numpy())
         with torch.no_grad():
-            outputs_outlier = self._predict_dataset(
-                self._outlier_test,
-                num_particles)
+            outputs_outlier = self._predict_dataset(self._outlier_test,
+                                                    num_particles)
         probs_outlier = F.softmax(outputs_outlier, -1).mean(0)
         entropy_outlier = entropy_fn(probs_outlier.T.cpu().detach().numpy())
         auroc_entropy = self._auc_score(entropy, entropy_outlier)
@@ -611,4 +610,3 @@ class HyperNetwork(Algorithm):
             alf.summary.scalar(name='train_epoch/neglogprob', data=cum_loss)
         if avg_acc is not None:
             alf.summary.scalar(name='train_epoch/avg_acc', data=avg_acc)
-
