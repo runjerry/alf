@@ -47,8 +47,8 @@ class PinverseNetwork(Network):
         downstream objective :math:`Jx - eps = 0`. 
 
         Args:
-            input_tensor_spec: A tuple of TensorSpecs (observation_spec, action_spec)
-                representing the inputs.
+            input_tensor_spec: A TensorSpec representing z_spec or a tuple of 
+            TensorSpecs (z_spec, eps_spec).
             output_dim (int): total output dimension of the pinverse net, will differ
                 between ``svgd3`` and ``minmax`` methods
             hidden_size (int): base hidden width for pinverse net
@@ -61,19 +61,23 @@ class PinverseNetwork(Network):
         """
         super().__init__(input_tensor_spec, name=name)
 
-        z_spec, eps_spec = input_tensor_spec
-        self._z_dim = z_spec.shape[0]
-        self._eps_dim = eps_spec.shape[0]
+        if isinstance(input_tensor_spec, tuple):
+            assert len(input_tensor_spec) == 2
+            z_spec, eps_spec = input_tensor_spec
+            self._z_dim = z_spec.shape[0]
+            self._eps_dim = eps_spec.shape[0]
+            assert self._eps_dim == output_dim or self._eps_dim == self._z_dim, (
+                "eps_dim must match either z_dim or output_dim!")
+        else:
+            assert isinstance(input_tensor_spec, TensorSpec)
+            self._z_dim = input_tensor_spec.shape[0]
+            self._eps_dim = None
+        assert self.z_dim <= output_dim, (
+            "z_dim cannot be greater than output_dim!")
+
         self._output_dim = output_dim
         self._hidden_size = hidden_size
         self._activation = activation
-        assert self._z_dim <= output_dim and (
-            self._eps_dim == output_dim or self._eps_dim == self._z_dim), (
-                "input_tensor_spec and output_dim does not match!")
-        if self._eps_dim == output_dim:
-            self._fullrank = True
-        else:
-            self._fullrank = False
 
         # if kernel_initializer is None:
         #     kernel_initializer = functools.partial(
@@ -84,11 +88,15 @@ class PinverseNetwork(Network):
         #         nonlinearity=math_ops.identity)
 
         self._z_encoder = torch.nn.Linear(self._z_dim, hidden_size)
-        self._eps_encoder = torch.nn.Linear(self._eps_dim, hidden_size)
+        if self._eps_dim is not None:
+            self._eps_encoder = torch.nn.Linear(self._eps_dim, hidden_size)
+            joint_hidden_size = 2 * hidden_size
+        else:
+            joint_hidden_size = hidden_size
         if joint_fc_layer_params is None:
-            joint_fc_layer_params = (hidden_size * 2, hidden_size * 2)
+            joint_fc_layer_params = (joint_hidden_size, joint_hidden_size)
         self._joint_encoder = EncodingNetwork(
-            TensorSpec(shape=(hidden_size * 2, )),
+            TensorSpec(shape=(joint_hidden_size, )),
             fc_layer_params=joint_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
@@ -99,7 +107,8 @@ class PinverseNetwork(Network):
         """Computes prediction given inputs.
 
         Args:
-            inputs:  A tuple of Tensors consistent with (z, eps) 
+            inputs:  Tensor z (self._eps_dim is None) or tuple of Tensors (z, eps) 
+                (self._eps_dim is not None)
                 z (torch.tensor): size [B', K] or [B', D], represents z' quantity 
                     in the ``svgd3`` case, where K is the input dimension to the 
                     generator, which is less or equal to the output dimension D.
@@ -114,24 +123,31 @@ class PinverseNetwork(Network):
                 [B, K, D] for ``minmax``.
             state: empty
         """
-        z, eps = inputs
+        if self._eps_dim is None:
+            z = inputs
+        else:
+            z, eps = inputs
+            assert eps.ndim == 3 and eps.shape[-1] == self._eps_dim, (
+                "the input eps has wrong shape!")
+            assert z.shape[0] == eps.shape[0], (
+                "batch sizes of input z and eps do not match!")
+        batch_size_z = z.shape[0]
         assert z.ndim == 2 and z.shape[-1] >= self._z_dim, (
             "the input z has wrong shape!")
-        assert eps.ndim == 3 and eps.shape[-1] == self._eps_dim, (
-            "the input eps has wrong shape!")
-        batch_size_z = z.shape[0]
-        assert eps.shape[0] == batch_size_z, (
-            "batch sizes of input z and eps do not match!")
 
         if z.shape[-1] > self._z_dim:
             z = z[:, :self._z_dim]
-        z = torch.repeat_interleave(z, eps.shape[1], dim=0)
-        eps = eps.reshape(batch_size_z * eps.shape[1], -1)
+        if self._eps_dim is not None:
+            z = torch.repeat_interleave(z, eps.shape[1], dim=0)
+        joint = self._activation(self._z_encoder(z))
 
-        encoded_z = self._activation(self._z_encoder(z))
-        encoded_eps = self._activation(self._eps_encoder(eps))
-        joint = torch.cat([encoded_z, encoded_eps], -1)
+        if self._z_dim is not None:
+            eps = eps.reshape(batch_size_z * eps.shape[1], -1)
+            encoded_eps = self._activation(self._eps_encoder(eps))
+            joint = torch.cat([joint, encoded_eps], -1)
+
         out, _ = self._joint_encoder(joint)
-        out = out.reshape(batch_size_z, -1, self._output_dim)
+        if self._z_dim is not None:
+            out = out.reshape(batch_size_z, -1, self._output_dim)
 
         return out, state

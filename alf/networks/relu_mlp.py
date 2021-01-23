@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 import gin
 import torch
 import torch.nn as nn
-from torch.nn.utils import spectral_norm as sn
+from torch.nn.utils import spectral_norm
 
 import alf
 from alf.layers import FC
@@ -32,7 +32,7 @@ class SimpleFC(nn.Linear):
     of diagonals of input-output Jacobian.
     """
 
-    def __init__(self, input_size, output_size, bias=True, activation=identity):
+    def __init__(self, input_size, output_size, activation=identity):
         """
         Initialize a SimpleFC layer.
 
@@ -42,10 +42,9 @@ class SimpleFC(nn.Linear):
             activation (nn.functional): activation used for this layer.
                 Default is math_ops.identity.
         """
-        super().__init__(input_size, output_size, bias=bias)
+        super().__init__(input_size, output_size)
         self._activation = activation
         self._hidden_neurons = None
-        # torch.nn.init.orthogonal_(self.weight)
 
     @property
     def hidden_neurons(self):
@@ -66,7 +65,6 @@ class ReluMLP(Network):
     def __init__(self,
                  input_tensor_spec,
                  output_size=None,
-                 bias=True,
                  hidden_layers=(64, 64),
                  activation=torch.relu_,
                  name="ReluMLP"):
@@ -86,105 +84,89 @@ class ReluMLP(Network):
         super().__init__(input_tensor_spec, name=name)
 
         self._input_size = input_tensor_spec.shape[0]
-        if output_size is None:
+        self._output_size = output_size
+        if self._output_size is None:
             self._output_size = self._input_size
-        else:
-            self._output_size = output_size
-        
-        self._activation = activation
         self._hidden_layers = hidden_layers
         self._n_hidden_layers = len(hidden_layers)
 
         self._fc_layers = nn.ModuleList()
         input_size = self._input_size
         for size in hidden_layers:
-            fc = SimpleFC(input_size, size, bias=bias, activation=activation)
+            fc = SimpleFC(input_size, size, activation=activation)
             self._fc_layers.append(fc)
             input_size = size
 
-        last_fc = SimpleFC(input_size, self._output_size, bias=bias, activation=identity)
+        last_fc = SimpleFC(input_size, self._output_size, activation=identity)
         self._fc_layers.append(last_fc)
 
-    def forward(self, 
+    def forward(self,
                 inputs,
-                state=(), 
+                state=(),
                 requires_jac=False,
                 requires_jac_diag=False):
         """
         Args:
             inputs (torch.Tensor)
             state: not used
+            requires_jac (bool): whether outputs input-output Jacobian.
             requires_jac_diag (bool): whetheer outputs diagonals of Jacobian.
         """
-        if inputs.ndim == 1:
+        ndim = inputs.ndim
+        if ndim == 1:
             inputs = inputs.unsqueeze(0)
         assert inputs.ndim == 2 and inputs.shape[-1] == self._input_size, \
-            ("inputs should has shape (B, {})!".format(self._input_size)) 
-        
+            ("inputs should has shape (B, {})!".format(self._input_size))
+
         z = inputs
         for fc in self._fc_layers:
             z = fc(z)
-        
-        if self._activation == torch.relu_:
-            compute_jac_fn = self._compute_jac
-        else:
-            compute_jac_fn = self._compute_jac_f
-
+        if ndim == 1:
+            z = z.squeeze(0)
         if requires_jac:
-            z = (z, compute_jac_fn())
-        if requires_jac_diag:
+            z = (z, self._compute_jac())
+        elif requires_jac_diag:
             z = (z, self._compute_jac_diag())
 
         return z, state
-    
+
     def compute_jac(self, inputs):
         """Compute the input-output Jacobian. """
 
-        inputs = inputs.squeeze()
         assert inputs.ndim <= 2 and inputs.shape[-1] == self._input_size, \
             ("inputs should has shape {}!".format(self._input_size))
 
         self.forward(inputs)
-        jac = self._compute_jac()
-        return jac
-    
-    def _compute_jac_f(self, inputs):
+        J = self._compute_jac()
+        if inputs.ndim == 1:
+            J = J.squeeze(0)
 
-        def f(inputs):
-            z = inputs
-            for fc in self._fc_layers:
-                z = fc(z)
-            return z
-        jac = []
-        for input in inputs:    
-            jac.append(torch.autograd.functional.jacobian(f, input))
-        return torch.stack(jac)
+        return J
 
     def _compute_jac(self):
         """Compute the input-output Jacobian. """
-        if len(self._hidden_layers) == 0:
-            mask = (self._fc_layers[-1].hidden_neurons > 0).float()
-            J = self._fc_layers[0].weight.unsqueeze(0).repeat(mask.shape[0], 1, 1)
-        else:
-            mask = (self._fc_layers[-2].hidden_neurons > 0).float()
-            J = torch.einsum('ia,ba,aj->bij', self._fc_layers[-1].weight, mask,
-                             self._fc_layers[-2].weight)
-            for fc in reversed(self._fc_layers[0:-2]):
-                mask = (fc.hidden_neurons > 0).float()
-                J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
+
+        mask = (self._fc_layers[-2].hidden_neurons > 0).float()
+        J = torch.einsum('ia,ba,aj->bij', self._fc_layers[-1].weight, mask,
+                         self._fc_layers[-2].weight)
+        for fc in reversed(self._fc_layers[0:-2]):
+            mask = (fc.hidden_neurons > 0).float()
+            J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
 
         return J  # [B, n_out, n_in]
-   
+
     def compute_jac_diag(self, inputs):
         """Compute diagonals of the input-output Jacobian. """
 
-        inputs = inputs.squeeze()
         assert inputs.ndim <= 2 and inputs.shape[-1] == self._input_size, \
             ("inputs should has shape {}!".format(self._input_size))
 
         self.forward(inputs)
+        J_diag = self._compute_jac_diag()
+        if inputs.ndim == 1:
+            J_diag = J_diag.squeeze(0)
 
-        return self._compute_jac_diag()
+        return J_diag
 
     def _compute_jac_diag(self):
         """Compute diagonals of the input-output Jacobian. """
@@ -208,19 +190,22 @@ class ReluMLP(Network):
 
     def compute_vjp(self, inputs, vec):
         """Compute vector-Jacobian product. 
+
         Args:
             inputs (Tensor): size (self._input_size) or (B, self._input_size)
             vec (Tensor): the vector for which the vector-Jacobian product
                 is computed. Must be of size (self._output_size) or
                 (B, self._output_size). 
+
         Returns:
             vjp (Tensor): size (self._input_size) or (B, self._input_size).
         """
 
-        assert inputs.ndim == vec.ndim, \
+        ndim = inputs.ndim
+        assert vec.ndim == ndim, \
             ("ndim of inputs and vec must be consistent!")
-        if inputs.ndim > 1:
-            assert inputs.ndim == 2, \
+        if ndim > 1:
+            assert ndim == 2, \
                 ("inputs must be a vector or matrix!")
             assert inputs.shape[0] == vec.shape[0], \
                 ("batch size of inputs and vec must agree!")
@@ -229,19 +214,23 @@ class ReluMLP(Network):
         assert vec.shape[-1] == self._output_size, \
             ("vec should has shape {}!".format(self._output_size))
 
-        self.forward(inputs)
+        outputs, _ = self.forward(inputs)
 
-        return self._compute_vjp(vec)
+        return self._compute_vjp(vec), outputs
 
     def _compute_vjp(self, vec):
         """Compute vector-Jacobian product. """
 
-        if vec.ndim == 1:
+        ndim = vec.ndim
+        if ndim == 1:
             vec = vec.unsqueeze(0)
 
         J = torch.matmul(vec, self._fc_layers[-1].weight)
         for fc in reversed(self._fc_layers[0:-1]):
             mask = (fc.hidden_neurons > 0).float()
-            J = torch.einsum('ba, ba, aj->bj', J, mask, fc.weight)
+            J = torch.matmul(J * mask, fc.weight)
 
-        return J  # [B, n_in]
+        if ndim == 1:
+            J = J.squeeze(0)
+
+        return J  # [B, n_in] or [n_in]
