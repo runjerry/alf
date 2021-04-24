@@ -192,7 +192,6 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
                 output_dim = len(trainset.dataset.classes)
             else:
                 output_dim = num_train_classes
-            input_tensor_spec = input_tensor_spec
         else:
             assert input_tensor_spec is not None and output_dim is not None, (
                 "input_tensor_spec and output_dim need to be provided if "
@@ -289,6 +288,9 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
             self._outlier_test_loader = outlier_data_loaders[1]
         else:
             self._outlier_train_loader = self._outlier_test_loader = None
+
+        batch_size = train_loader.batch_size
+        self._entropy_regarization = batch_size / len(train_loader.dataset)
 
     def predict_step(self, inputs, params=None, state=None):
         """Predict ensemble outputs for inputs using the hypernetwork model.
@@ -448,11 +450,13 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
             # [N, B, D] -> [N, -1]
             targets = targets.view(num_particles, -1)
         else:
-            # [B] -> [B, 1]
-            targets = targets.unsqueeze(1)
-            # [B, 1] -> [N, B, 1]
-            targets = targets.unsqueeze(0).expand(num_particles,
-                                                  *targets.shape)
+            # [N, B * D] -> [N, B, D]
+            outputs = outputs.view(num_particles, targets.shape[0], -1)
+            # [N, B , D] -> [B, N, D]
+            outputs = outputs.transpose(0, 1)
+            # [B] -> [B, N]
+            targets = targets.unsqueeze(1).expand(targets.shape[0],
+                                                  num_particles)
 
         return self._loss_func(outputs, targets)
 

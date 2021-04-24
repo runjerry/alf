@@ -506,20 +506,7 @@ class FCBatchEnsemble(FC):
                   Liu, Chang, et al. "Understanding and accelerating particle-based
                   variational inference." ICML, 2019.
         """
-        nn.Module.__init__(self)
-        self._r = nn.Parameter(torch.Tensor(ensemble_size, input_size))
-        self._s = nn.Parameter(torch.Tensor(ensemble_size, output_size))
-        self._ensemble_bias = nn.Parameter(
-            torch.Tensor(ensemble_size, output_size))
-        assert isinstance(ensemble_group,
-                          int), ("ensemble_group has to be an integer!")
-        self._r.ensemble_group = ensemble_group
-        self._s.ensemble_group = ensemble_group
-        self._ensemble_bias.ensemble_group = ensemble_group
-        self._use_ensemble_bias = use_bias
-        self._ensemble_size = ensemble_size
-        self._output_ensemble_ids = output_ensemble_ids
-        self._bias_init_range = bias_init_range
+        self._reset_params = False
         super().__init__(
             input_size,
             output_size,
@@ -530,23 +517,41 @@ class FCBatchEnsemble(FC):
             kernel_initializer=kernel_initializer,
             kernel_init_gain=kernel_init_gain)
 
+        self._reset_params = True
+        self._r = nn.Parameter(torch.Tensor(ensemble_size, input_size))
+        self._s = nn.Parameter(torch.Tensor(ensemble_size, output_size))
+        self._ensemble_bias = nn.Parameter(
+            torch.Tensor(ensemble_size, output_size))
+        if ensemble_group is not None:
+            assert isinstance(ensemble_group,
+                              int), ("ensemble_group has to be an integer!")
+            self._r.ensemble_group = ensemble_group
+            self._s.ensemble_group = ensemble_group
+            self._ensemble_bias.ensemble_group = ensemble_group
+        self._use_ensemble_bias = use_bias
+        self._ensemble_size = ensemble_size
+        self._output_ensemble_ids = output_ensemble_ids
+        self._bias_init_range = bias_init_range
+        self.reset_parameters()
+
     def reset_parameters(self):
         """Reinitialize parameters."""
-        super().reset_parameters()
-        # Both r and s are initialized to +1/-1 according to Appendix B
-        torch.randint(
-            2, size=self._r.shape, dtype=torch.float32, out=self._r.data)
-        torch.randint(
-            2, size=self._s.shape, dtype=torch.float32, out=self._s.data)
-        self._r.data.mul_(2)
-        self._r.data.sub_(1)
-        self._s.data.mul_(2)
-        self._s.data.sub_(1)
-        if self._use_ensemble_bias:
-            nn.init.uniform_(
-                self._ensemble_bias.data,
-                a=-self._bias_init_range,
-                b=self._bias_init_range)
+        if self._reset_params:
+            super().reset_parameters()
+            # Both r and s are initialized to +1/-1 according to Appendix B
+            torch.randint(
+                2, size=self._r.shape, dtype=torch.float32, out=self._r.data)
+            torch.randint(
+                2, size=self._s.shape, dtype=torch.float32, out=self._s.data)
+            self._r.data.mul_(2)
+            self._r.data.sub_(1)
+            self._s.data.mul_(2)
+            self._s.data.sub_(1)
+            if self._use_ensemble_bias:
+                nn.init.uniform_(
+                    self._ensemble_bias.data,
+                    a=-self._bias_init_range,
+                    b=self._bias_init_range)
 
     def forward(self, inputs):
         """Forward computation.
@@ -570,8 +575,13 @@ class FCBatchEnsemble(FC):
         if type(inputs) == tuple:
             inputs, ensemble_ids = inputs
         else:
-            ensemble_ids = torch.randint(
-                self._ensemble_size, size=(inputs.shape[0], ))
+            batch_size = inputs.shape[0]
+            replica = int(batch_size / self._ensemble_size)
+            remains = batch_size % self._ensemble_size
+            main_ids = torch.arange(self._ensemble_size).repeat(replica)
+            # perm_ids = main_ids[torch.randperm(len(main_ids))]
+            remain_ids = torch.randint(self._ensemble_size, size=(remains, ))
+            ensemble_ids = torch.cat([main_ids, remain_ids], dim=0)
         batch_size = inputs.shape[0]
         output_size, input_size = self._weight.shape
         r = self._r[ensemble_ids]  # [batch_size, input_size]
@@ -985,6 +995,7 @@ class Conv2DBatchEnsemble(Conv2D):
                  activation=torch.relu_,
                  strides=1,
                  padding=0,
+                 pooling_kernel=None,
                  use_bias=None,
                  use_bn=False,
                  kernel_initializer=None,
@@ -1003,6 +1014,7 @@ class Conv2DBatchEnsemble(Conv2D):
             activation (torch.nn.functional):
             strides (int or tuple):
             padding (int or tuple):
+            pooling_kernel (int or tuple):
             use_bias (bool|None): whether use bias. If None, will use ``not use_bn``
             use_bn (bool): whether use batch normalization
             kernel_initializer (Callable): initializer for the conv layer kernel.
@@ -1031,47 +1043,59 @@ class Conv2DBatchEnsemble(Conv2D):
                   Liu, Chang, et al. "Understanding and accelerating particle-based
                   variational inference." ICML, 2019.
         """
-        nn.Module.__init__(self)
-        self._r = nn.Parameter(torch.Tensor(ensemble_size, in_channels))
-        self._s = nn.Parameter(torch.Tensor(ensemble_size, out_channels))
-        self._ensemble_bias = nn.Parameter(
-            torch.Tensor(ensemble_size, out_channels))
-        assert isinstance(ensemble_group,
-                          int), ("ensemble_group has to be an integer!")
-        self._r.ensemble_group = ensemble_group
-        self._s.ensemble_group = ensemble_group
-        self._ensemble_bias.ensemble_group = ensemble_group
-        self._use_ensemble_bias = use_bias
-        self._ensemble_size = ensemble_size
-        self._output_ensemble_ids = output_ensemble_ids
-        self._bias_init_range = bias_init_range
+        self._reset_params = False
         super().__init__(
             in_channels,
             out_channels,
             kernel_size,
             activation=activation,
+            strides=strides,
+            padding=padding,
             use_bias=False,
             use_bn=False,
             kernel_initializer=kernel_initializer,
             kernel_init_gain=kernel_init_gain)
 
+        self._reset_params = True
+        self._r = nn.Parameter(torch.Tensor(ensemble_size, in_channels))
+        self._s = nn.Parameter(torch.Tensor(ensemble_size, out_channels))
+        if ensemble_group is not None:
+            assert isinstance(ensemble_group,
+                              int), ("ensemble_group has to be an integer!")
+            self._r.ensemble_group = ensemble_group
+            self._s.ensemble_group = ensemble_group
+        if use_bias is None:
+            use_bias = not use_bn
+        self._use_ensemble_bias = use_bias
+        if use_bias:
+            self._ensemble_bias = nn.Parameter(
+                torch.Tensor(ensemble_size, out_channels))
+            if ensemble_group is not None:
+                self._ensemble_bias.ensemble_group = ensemble_group
+        self._ensemble_size = ensemble_size
+        self._output_ensemble_ids = output_ensemble_ids
+        self._bias_init_range = bias_init_range
+        self._pooling_kernel = pooling_kernel
+        self.reset_parameters()
+
     def reset_parameters(self):
         """Reinitialize the parameters."""
-        super().reset_parameters()
-        # Both r and s are initialized to +1/-1 according to Appendix B
-        torch.randint(
-            2, size=self._r.shape, dtype=torch.float32, out=self._r.data)
-        torch.randint(
-            2, size=self._s.shape, dtype=torch.float32, out=self._s.data)
-        self._r.data.mul_(2)
-        self._r.data.sub_(1)
-        self._s.data.mul_(2)
-        self._s.data.sub_(1)
-        if self._use_ensemble_bias:
-            nn.init.uniform_(
-                self._ensemble_bias.data,
-                a=-self._bias_init_range,
-                b=self._bias_init_range)
+        if self._reset_params:
+            super().reset_parameters()
+            # Both r and s are initialized to +1/-1 according to Appendix B
+            torch.randint(
+                2, size=self._r.shape, dtype=torch.float32, out=self._r.data)
+            torch.randint(
+                2, size=self._s.shape, dtype=torch.float32, out=self._s.data)
+            self._r.data.mul_(2)
+            self._r.data.sub_(1)
+            self._s.data.mul_(2)
+            self._s.data.sub_(1)
+            if self._use_ensemble_bias:
+                nn.init.uniform_(
+                    self._ensemble_bias.data,
+                    a=-self._bias_init_range,
+                    b=self._bias_init_range)
 
     def forward(self, inputs):
         """Forward computation.
@@ -1093,8 +1117,13 @@ class Conv2DBatchEnsemble(Conv2D):
         if type(inputs) == tuple:
             inputs, ensemble_ids = inputs
         else:
-            ensemble_ids = torch.randint(
-                self._ensemble_size, size=(inputs.shape[0], ))
+            batch_size = inputs.shape[0]
+            replica = int(batch_size / self._ensemble_size)
+            remains = batch_size % self._ensemble_size
+            main_ids = torch.arange(self._ensemble_size).repeat(replica)
+            # perm_ids = main_ids[torch.randperm(len(main_ids))]
+            remain_ids = torch.randint(self._ensemble_size, size=(remains, ))
+            ensemble_ids = torch.cat([main_ids, remain_ids], dim=0)
         batch_size = inputs.shape[0]
         r = self._r[ensemble_ids].unsqueeze_(-1).unsqueeze_(
             -1)  # [B, in_channels, 1, 1]
@@ -1109,6 +1138,8 @@ class Conv2DBatchEnsemble(Conv2D):
             y = self._bn(y)
 
         y = self._activation(y)
+        if self._pooling_kernel is not None:
+            y = F.max_pool2d(y, self._pooling_kernel)
         if self._output_ensemble_ids:
             return y, ensemble_ids
         else:

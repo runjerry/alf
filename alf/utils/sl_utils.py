@@ -39,17 +39,30 @@ def classification_loss(output, target):
             accuracy.
     """
 
-    if output.ndim == 2:
-        output = output.reshape(output.shape[0], target.shape[1], -1)
+    target = target.squeeze()
+    if output.ndim == 3:
+        if target.ndim == 2:
+            assert output.shape[:2] == target.shape, (
+                "batch and replica dimensions of output and target do not match"
+            )
+        elif target.ndim == 1:
+            assert target.shape[0] == output.shape[0], (
+                "batch size of output and target do not match")
+            target = target.unsqueeze(1).expand(target.shape[0],
+                                                output.shape[1])
+        else:
+            raise ValueError("target has wrong shape")
+    elif output.ndim == 2:
+        assert target.ndim == 1 and output.shape[0] == target.shape[0], (
+            "batch dimension of output and target do not match")
+    else:
+        raise ValueError("output should have shape [B, D] or [B, N, D]")
+
     pred = output.max(-1)[1]
-    target = target.squeeze(-1)
     acc = pred.eq(target).float().mean(0)
     avg_acc = acc.mean()
     if output.ndim == 3:
         output = output.transpose(1, 2)
-    else:
-        output = output.reshape(output.shape[0] * target.shape[1], -1)
-        target = target.reshape(-1)
     loss = F.cross_entropy(output, target)
     return LossInfo(loss=loss, extra=avg_acc)
 

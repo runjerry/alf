@@ -110,7 +110,7 @@ def load_mnist(label_idx=None, train_bs=100, test_bs=100, num_workers=0):
          transforms.Normalize((0.1307, ), (0.3081, ))])
 
     trainset = datasets.MNIST(
-        root=path, train=False, download=True, transform=data_transform)
+        root=path, train=True, download=True, transform=data_transform)
     testset = datasets.MNIST(root=path, train=False, transform=data_transform)
 
     if label_idx is not None:
