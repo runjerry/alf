@@ -36,6 +36,7 @@ class TrainerConfig(object):
                  confirm_checkpoint_upon_crash=True,
                  load_checkpoint_strict=True,
                  evaluate=False,
+                 remote_eval=False,
                  eval_interval=10,
                  epsilon_greedy=0.,
                  eval_uncertainty=False,
@@ -119,6 +120,7 @@ class TrainerConfig(object):
                 any of the lists is non-empty; if ``strict=False``, missing/unexpected
                 keys will be omitted and no error will be raised.
             evaluate (bool): A bool to evaluate when training
+            remote_eval (bool): A bool to remote evluate during training
             eval_interval (int): evaluate every so many iteration
             epsilon_greedy (float): a floating value in [0,1], representing the
                 chance of action sampling instead of taking argmax. This can
@@ -199,6 +201,7 @@ class TrainerConfig(object):
         self.confirm_checkpoint_upon_crash = confirm_checkpoint_upon_crash
         self.load_checkpoint_strict = load_checkpoint_strict
         self.evaluate = evaluate
+        self.remote_eval = remote_eval
         self.eval_interval = eval_interval
         self.epsilon_greedy = epsilon_greedy
         self.eval_uncertainty = eval_uncertainty
