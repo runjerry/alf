@@ -1114,3 +1114,32 @@ def get_alf_snapshot_env_vars(root_dir):
     env_vars = copy.copy(os.environ)
     env_vars.update({"PYTHONPATH": python_path})
     return env_vars
+
+
+def conjugate_gradient(Avp_fn, b, max_steps, tol=1e-8):
+    r"""Conjugate gradient method for solving :math:`Ax=b`.
+
+    Args:
+        Avp_fn (Callable): the function for computing :math:`Av` for any vector v.
+        b (Tensor): vector b.
+        max_steps (int): max number of iterations.
+        tol (float): Desired acurracy. The algorithm terminates if either ``max_steps``
+            is reached or the result x satisfies :math:`|Ax - b| \le tol`.
+    """
+    x = torch.zeros(b.shape, device=b.device)
+    r = b.detach().clone()
+    p = b.detach().clone()
+    r_norm = torch.dot(r, r)
+    for i in range(max_steps):
+        Ap = Avp_fn(p)
+        alpha = r_norm / torch.dot(p, Ap)
+        x += alpha * p
+        r -= alpha * Ap
+        upd_r_norm = torch.dot(r, r)
+        if upd_r_norm < tol:
+            break
+        beta = upd_r_norm / r_norm
+        p = r + beta * p
+        r_norm = upd_r_norm
+
+    return x
