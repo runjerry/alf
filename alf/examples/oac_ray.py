@@ -27,17 +27,7 @@ from alf.utils.math_ops import clipped_exp
 
 fc_layer_params = (256, 256)
 
-# env_name = "HalfCheetah-v2"
-# actor_network_cls = partial(
-#     ActorDistributionNetwork,
-#     fc_layer_params=fc_layer_params,
-#     continuous_projection_net_ctor=partial(
-#         NormalProjectionNetwork,
-#         state_dependent_std=True,
-#         scale_distribution=True,
-#         std_transform=clipped_exp))
-
-env_name = "Humanoid-v2"
+env_name = "HalfCheetah-v2"
 actor_network_cls = partial(
     ActorDistributionNetwork,
     fc_layer_params=fc_layer_params,
@@ -45,8 +35,18 @@ actor_network_cls = partial(
         NormalProjectionNetwork,
         state_dependent_std=True,
         scale_distribution=True,
-        std_transform=partial(
-            clipped_exp, clip_value_min=-10, clip_value_max=2)))
+        std_transform=clipped_exp))
+
+# env_name = "Humanoid-v2"
+# actor_network_cls = partial(
+#     ActorDistributionNetwork,
+#     fc_layer_params=fc_layer_params,
+#     continuous_projection_net_ctor=partial(
+#         NormalProjectionNetwork,
+#         state_dependent_std=True,
+#         scale_distribution=True,
+#         std_transform=partial(
+#             clipped_exp, clip_value_min=-10, clip_value_max=2)))
 
 critic_network_cls = partial(
     CriticNetwork, joint_fc_layer_params=fc_layer_params)
@@ -113,7 +113,9 @@ class RemoteAlgorithmEvaluator(object):
         self._env.reset()
 
     @torch.no_grad()
-    def eval(self, state_dict):
+    def eval(self, state_dict, train_step=None, step_metrics=()):
+        self._train_step = train_step
+        self._step_metrics = step_metrics
         actor_state_dict = state_dict
         self._algorithm._actor_network.load_state_dict(actor_state_dict)
 
@@ -144,4 +146,5 @@ class RemoteAlgorithmEvaluator(object):
                 episodes += 1
 
     def get_eval_results(self):
-        return [metric.result() for metric in self._eval_metrics]
+        results = [metric.result() for metric in self._eval_metrics]
+        return results, self._train_step, self._step_metrics

@@ -22,7 +22,7 @@ import unittest
 import alf
 from alf.algorithms.config import TrainerConfig
 from alf.algorithms.rl_algorithm import RLAlgorithm
-from alf.algorithms.oac_algorithm import OacAlgorithm, OacNormalProjectionNetwork
+from alf.algorithms.oac_algorithm import OacAlgorithm, NormalProjectionNetwork
 from alf.algorithms.sac_algorithm import SacState
 from alf.algorithms.rl_algorithm_test import MyEnv
 from alf.data_structures import TimeStep
@@ -40,7 +40,6 @@ class OACAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
         config = TrainerConfig(
             root_dir="dummy",
             unroll_length=1,
-            unroll_with_grad=True,
             mini_batch_length=2,
             mini_batch_size=64,
             initial_collect_steps=500,
@@ -69,7 +68,7 @@ class OACAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
         fc_layer_params = (10, 10)
 
         continuous_projection_net_ctor = partial(
-            OacNormalProjectionNetwork,
+            NormalProjectionNetwork,
             state_dependent_std=True,
             scale_distribution=True,
             std_transform=clipped_exp)

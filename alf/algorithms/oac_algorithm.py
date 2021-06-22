@@ -73,10 +73,9 @@ class OacAlgorithm(SacAlgorithm):
         Refer to SacAlgorithm for Args besides the following.
 
         Args:
-            explore (bool): default is True for OAC algorithm, where 
-                'unroll_with_grad' has to be True in the 'TrainerConfig' 
-                and only continuous action space is supported.
-                When 'explore' is False, OAC is the same as SAC. 
+            explore (bool): default is True for OAC algorithm, where only 
+                continuous action space is supported. When 'explore' is False, 
+                OAC is the same as SAC. 
             explore_delta (float): parameter controlling how optimistic in shifting
                 the mean of the target policy to get the mean of the explore policy.
             beta_ub (float): parameter for computing the upperbound of Q value:
@@ -141,8 +140,6 @@ class OacAlgorithm(SacAlgorithm):
         unsquashed_mean = normal_dist.mean
         unsquashed_std = normal_dist.stddev
         unsquashed_var = normal_dist.variance
-
-        # sampled_action = dist_utils.rsample_action_distribution(action_dist)
         new_state = new_state._replace(actor_network=actor_network_state)
 
         def mean_shift_fn(mu, dqda, sigma):
@@ -157,16 +154,19 @@ class OacAlgorithm(SacAlgorithm):
             critic_action = normal_dist.mean.detach().clone()
             critic_action.requires_grad = True
             transformed_action = critic_action
-            for transform in action_dist.transforms:
-                transformed_action = transform(transformed_action)
-            critics, critic_state = self._critic_networks(
-                (observation, transformed_action), state=state.critic)
-            new_state = new_state._replace(critic=critic_state)
-            assert critics.ndim == 2
-            q_mean = critics.mean(dim=1)
-            q_std = torch.abs(critics[:, 0] - critics[:, 1]) / 2.0
-            q_ub = q_mean + self._beta_ub * q_std
-            dqda = nest_utils.grad(critic_action, q_ub.sum())
+            with torch.enable_grad():
+                for transform in action_dist.transforms:
+                    transformed_action = transform(transformed_action)
+                critics, critic_state = self._critic_networks(
+                    (observation, transformed_action), state=state.critic)
+                new_state = new_state._replace(critic=critic_state)
+                if critics.ndim > 2:
+                    critics = critics.squeeze()
+                assert critics.ndim == 2
+                q_mean = critics.mean(dim=1)
+                q_std = torch.abs(critics[:, 0] - critics[:, 1]) / 2.0
+                q_ub = q_mean + self._beta_ub * q_std
+                dqda = nest_utils.grad(critic_action, q_ub.sum())
             shifted_mean = nest.map_structure(mean_shift_fn, unsquashed_mean,
                                               dqda, unsquashed_var)
             normal_dist = dist_utils.DiagMultivariateNormal(

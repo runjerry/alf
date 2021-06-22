@@ -400,21 +400,23 @@ class RLTrainer(Trainer):
             time_to_checkpoint = self._trainer_progress._env_steps + checkpoint_interval
 
         remote_eval_run = False
-        total_time_steps = 0
         while True:
             t0 = time.time()
-            if self._evaluate and (iter_num + 1) % self._eval_interval == 0 and \
-                self._remote_eval and total_time_steps >= self._config.initial_collect_steps:
-                remote_eval_id = self._launch_remote_eval()
-                remote_eval_run = True
-
             with record_time("time/train_iter"):
                 train_steps = self._algorithm.train_iter()
-                # wait for remote_eval to finish
-                if remote_eval_run:
-                    self._fetch_remote_result(remote_eval_id)
-                    remote_eval_run = False
-
+            env_steps_metric = self._algorithm.get_step_metrics()[1]
+            total_time_steps = env_steps_metric.result()
+            if self._evaluate and (iter_num + 1) % self._eval_interval == 0 and \
+                total_time_steps >= self._config.initial_collect_steps:
+                if self._remote_eval:
+                    # wait for remote_eval to finish
+                    if remote_eval_run:
+                        self._fetch_remote_result(remote_eval_id)
+                        remote_eval_run = False
+                    remote_eval_id = self._launch_remote_eval()
+                    remote_eval_run = True
+                else:
+                    self._eval()
             t = time.time() - t0
             logging.log_every_n_seconds(
                 logging.INFO,
@@ -424,17 +426,11 @@ class RLTrainer(Trainer):
                  int(train_steps) / t),
                 n_seconds=1)
 
-            if self._evaluate and (iter_num + 1) % self._eval_interval == 0:
-                if not self._remote_eval:
-                    self._eval()
             if iter_num == begin_iter_num:
                 self._summarize_training_setting()
 
             # check termination
-            env_steps_metric = self._algorithm.get_step_metrics()[1]
-            total_time_steps = env_steps_metric.result()
             iter_num += 1
-
             self._trainer_progress.update(iter_num, total_time_steps)
 
             if ((self._num_iterations and iter_num >= self._num_iterations)
@@ -444,6 +440,8 @@ class RLTrainer(Trainer):
                 # will align with the final iter/env_step.
                 if self._evaluate:
                     if self._remote_eval:
+                        if remote_eval_run:
+                            self._fetch_remote_result(remote_eval_id)
                         remote_eval_id = self._launch_remote_eval()
                         self._fetch_remote_result(remote_eval_id)
                     else:
@@ -518,23 +516,28 @@ class RLTrainer(Trainer):
     def _launch_remote_eval(self):
         actor_state_dict = self._algorithm._rl_algorithm._actor_network.state_dict(
         )
+        train_step = alf.summary.get_global_counter()
+        step_metrics = self._algorithm.get_step_metrics()
+        metric_names = [metric.name for metric in step_metrics]
+        metric_steps = [metric.result() for metric in step_metrics]
         actor_state_dict = convert_device(actor_state_dict, device='cpu')
-        remote_eval_id = self._remote_evaluator.eval.remote(actor_state_dict)
+        metric_steps = convert_device(metric_steps, device='cpu')
+        remote_eval_id = self._remote_evaluator.eval.remote(
+            actor_state_dict,
+            train_step=train_step,
+            step_metrics=zip(metric_names, metric_steps))
         return remote_eval_id
 
     def _fetch_remote_result(self, remote_id):
         ray.get([remote_id])
-        eval_results = ray.get(
+        eval_results, train_step, step_metrics = ray.get(
             self._remote_evaluator.get_eval_results.remote())
         eval_results = convert_device(eval_results)
         assert len(eval_results) == len(self._eval_metrics)
-        step_metrics = self._algorithm.get_step_metrics()
         with alf.summary.push_summary_writer(self._eval_summary_writer):
             for metric, result in zip(self._eval_metrics, eval_results):
                 metric.gen_summaries_from_result(
-                    result,
-                    train_step=alf.summary.get_global_counter(),
-                    step_metrics=step_metrics)
+                    result, train_step=train_step, step_metrics=step_metrics)
         # common.log_metrics(eval_metrics)
 
 
