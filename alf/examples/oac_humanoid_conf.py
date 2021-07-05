@@ -26,9 +26,11 @@ from alf.utils.losses import element_wise_squared_loss
 
 import sac_conf
 
+env_name = "Humanoid-v2"
+
 # environment config
 alf.config(
-    'create_environment', env_name="Humanoid-v2", num_parallel_environments=1)
+    'create_environment', env_name=env_name, num_parallel_environments=1)
 
 # algorithm config
 fc_layer_params = (256, 256)
@@ -67,6 +69,7 @@ alf.config('Agent', rl_algorithm_cls=OacAlgorithm)
 
 alf.config(
     'TrainerConfig',
+    env_name=env_name,
     initial_collect_steps=10000,
     mini_batch_length=2,
     unroll_length=1,

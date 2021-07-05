@@ -27,7 +27,6 @@ from alf.utils.math_ops import clipped_exp
 
 fc_layer_params = (256, 256)
 
-env_name = "HalfCheetah-v2"
 actor_network_cls = partial(
     ActorDistributionNetwork,
     fc_layer_params=fc_layer_params,
@@ -37,7 +36,6 @@ actor_network_cls = partial(
         scale_distribution=True,
         std_transform=clipped_exp))
 
-# env_name = "Humanoid-v2"
 # actor_network_cls = partial(
 #     ActorDistributionNetwork,
 #     fc_layer_params=fc_layer_params,
@@ -52,8 +50,7 @@ critic_network_cls = partial(
     CriticNetwork, joint_fc_layer_params=fc_layer_params)
 
 
-def _environment_creator(random_seed=None):
-
+def _environment_creator(env_name, random_seed=None):
     env = create_environment(
         env_name=env_name, nonparallel=True, seed=random_seed)
     return env
@@ -82,7 +79,7 @@ class RemoteAlgorithmEvaluator(object):
     def __init__(self, env_seed, config):
 
         torch.set_num_threads(1)
-        self._env = _environment_creator(random_seed=env_seed)
+        self._env = _environment_creator(config.env_name, random_seed=env_seed)
 
         data_transformer = create_data_transformer(
             config.data_transformer_ctor, self._env.observation_spec())
