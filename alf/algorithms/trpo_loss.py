@@ -224,7 +224,7 @@ class TRPOLoss(nn.Module):
             _Fvp, -grads_flat, max_steps=10)
         gHg = cg_grads_flat.dot(_Fvp(cg_grads_flat))
 
-        pg_step = math.sqrt(2 * 2 * self._delta_kl / gHg) * cg_grads_flat
+        pg_step = math.sqrt(2 * self._delta_kl / gHg) * cg_grads_flat
         expected_improve = -grads_flat.dot(pg_step)
 
         cur_params_flat = self._get_actor_params_flat(actor_network)

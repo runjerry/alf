@@ -27,7 +27,7 @@ from alf.nest.utils import NestConcat
 from alf.optimizers import Adam, AdamTF
 from alf.utils.losses import element_wise_squared_loss
 
-from alf.examples import trpo_conf
+from alf.examples import ppo_conf
 
 env_name = "HumanoidBulletEnv-v0"
 
@@ -59,7 +59,7 @@ alf.config(
     value_network_ctor=value_network_ctor)
 
 alf.config(
-    'TRPOLoss',
+    'PPOLoss',
     entropy_regularization=1e-2,
     gamma=0.99,
     td_lambda=0.95,
