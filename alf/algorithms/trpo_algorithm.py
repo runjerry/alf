@@ -34,9 +34,6 @@ TRPOInfo = namedtuple(
     ],
     default_value=())
 
-# TRPOInfo = namedtuple("TRPOInfo",
-#     ["action_distribution", "returns", "advantages"])
-
 
 @alf.configurable
 class TRPOAlgorithm(ActorCriticAlgorithm):
@@ -70,18 +67,6 @@ class TRPOAlgorithm(ActorCriticAlgorithm):
                 action_distribution=exp.rollout_info.action_distribution,
                 returns=returns,
                 advantages=advantages))
-
-    # def predict_step(self, time_step: TimeStep, state: ActorCriticState,
-    #                  epsilon_greedy):
-    #     """Predict for one step."""
-    #     action_dist, actor_state = self._actor_network(
-    #         time_step.observation, state=state.actor)
-
-    #     action = dist_utils.epsilon_greedy_sample(action_dist, epsilon_greedy)
-    #     return AlgStep(
-    #         output=action,
-    #         state=ActorCriticState(actor=actor_state),
-    #         info=TRPOInfo(action_distribution=action_dist))
 
     def rollout_step(self, time_step: TimeStep, state: ActorCriticState):
         """Rollout for one step."""

@@ -1209,6 +1209,7 @@ def compute_summary_or_eval_interval(config, summary_or_eval_calls=100):
     logging.info("A summary or eval interval=%d is calculated" % interval)
     return interval
 
+
 def conjugate_gradient(Avp_fn, b, max_steps, tol=1e-8):
     r"""Conjugate gradient method for solving :math:`Ax=b`.
 
