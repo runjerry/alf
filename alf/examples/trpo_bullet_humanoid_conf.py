@@ -60,7 +60,7 @@ alf.config(
 
 alf.config(
     'TRPOLoss',
-    entropy_regularization=1e-2,
+    # entropy_regularization=1e-2,
     gamma=0.99,
     td_lambda=0.95,
     td_error_loss_fn=element_wise_squared_loss,

@@ -23,8 +23,9 @@ import torch.nn as nn
 import alf
 
 from alf.data_structures import LossInfo
-from alf.algorithms.actor_critic_loss import _normalize_advantages
+from alf.algorithms.actor_critic_loss import ActorCriticLoss, _normalize_advantages
 import alf.nest as nest
+from alf.utils.summary_utils import safe_mean_hist_summary
 from alf.utils.losses import element_wise_squared_loss
 from alf.utils import common, dist_utils, tensor_utils, value_ops
 
@@ -32,7 +33,7 @@ TRPOLossInfo = namedtuple("TRPOLossInfo", ["td_loss", "neg_entropy"])
 
 
 @alf.configurable
-class TRPOLoss(nn.Module):
+class TRPOLoss(ActorCriticLoss):
     """TRPO loss."""
 
     def __init__(self,
@@ -93,21 +94,18 @@ class TRPOLoss(nn.Module):
             check_numerics (bool):  If true, checking for ``NaN/Inf`` values. For
                 debugging only.
         """
-        super().__init__()
-
-        self._td_loss_weight = td_loss_weight
-        self._name = name
-        self._gamma = gamma
-        self._td_error_loss_fn = td_error_loss_fn
-        self._use_gae = use_gae
-        self._lambda = td_lambda
-        self._use_td_lambda_return = use_td_lambda_return
-        self._normalize_advantages = normalize_advantages
-        assert advantage_clip is None or advantage_clip > 0, (
-            "Clipping value should be positive!")
-        self._advantage_clip = advantage_clip
-        self._entropy_regularization = entropy_regularization
-        self._debug_summaries = debug_summaries
+        super().__init__(
+            gamma=gamma,
+            td_error_loss_fn=td_error_loss_fn,
+            use_gae=True,
+            td_lambda=td_lambda,
+            use_td_lambda_return=True,
+            normalize_advantages=normalize_advantages,
+            advantage_clip=advantage_clip,
+            entropy_regularization=entropy_regularization,
+            td_loss_weight=td_loss_weight,
+            debug_summaries=debug_summaries,
+            name=name)
 
         self._importance_ratio_clipping = importance_ratio_clipping
         self._log_prob_clipping = log_prob_clipping
@@ -115,34 +113,45 @@ class TRPOLoss(nn.Module):
         self._damping = damping
         self._check_numerics = check_numerics
 
-    def forward(self, actor_network, experience, train_info):
+    def forward(self, actor_network, info):
         """Cacluate actor critic loss. The first dimension of all the tensors is
         time dimension and the second dimesion is the batch dimension.
 
         Args:
-            experience (nest): experience used for training. All tensors are
-                time-major.
-            train_info (nest): information collected for training. It is batched
-                from each ``AlgStep.info`` returned by ``rollout_step()``
-                (on-policy training) or ``train_step()`` (off-policy training).
-                All tensors in ``train_info`` are time-major.
+            actor_network (Nework): 
+            info (namedtuple): information for calculating loss. All tensors are
+                time-major. It should contain the following fields:
+                - reward:
+                - step_type:
+                - discount:
+                - action:
+                - action_distribution:
+                - value:
         Returns:
             LossInfo: with ``extra`` being ``TRPOLossInfo``.
         """
 
-        value = train_info.value
-        returns, advantages = self._calc_returns_and_advantages(
-            experience, value)
+        value = info.value
+        returns, advantages = self._calc_returns_and_advantages(info, value)
 
         if self._debug_summaries and alf.summary.should_record_summaries():
             with alf.summary.scope(self._name):
-                alf.summary.scalar("values", value.mean())
-                alf.summary.scalar("returns", returns.mean())
-                alf.summary.scalar("advantages/mean", advantages.mean())
-                alf.summary.histogram("advantages/value", advantages)
-                alf.summary.scalar(
-                    "explained_variance_of_return_by_value",
-                    tensor_utils.explained_variance(value, returns))
+
+                def _summarize(v, r, adv, suffix):
+                    alf.summary.scalar("values" + suffix, v.mean())
+                    alf.summary.scalar("returns" + suffix, r.mean())
+                    safe_mean_hist_summary('advantages' + suffix, adv)
+                    alf.summary.scalar(
+                        "explained_variance_of_return_by_value" + suffix,
+                        tensor_utils.explained_variance(v, r))
+
+                if value.ndim == 2:
+                    _summarize(value, returns, advantages, '')
+                else:
+                    for i in range(value.shape[2]):
+                        suffix = '/' + str(i)
+                        _summarize(value[..., i], returns[..., i],
+                                   advantages[..., i], suffix)
 
         if self._normalize_advantages:
             advantages = _normalize_advantages(advantages)
@@ -151,7 +160,7 @@ class TRPOLoss(nn.Module):
             advantages = torch.clamp(advantages, -self._advantage_clip,
                                      self._advantage_clip)
 
-        self._policy_update(actor_network, experience, train_info, advantages)
+        self._policy_update(actor_network, info, advantages)
 
         td_loss = self._td_error_loss_fn(returns.detach(), value)
 
@@ -160,7 +169,7 @@ class TRPOLoss(nn.Module):
         entropy_loss = ()
         if self._entropy_regularization is not None:
             entropy, entropy_for_gradient = dist_utils.entropy_with_fallback(
-                train_info.action_distribution, return_sum=False)
+                info.action_distribution, return_sum=False)
             entropy_loss = alf.nest.map_structure(lambda x: -x, entropy)
             loss -= self._entropy_regularization * sum(
                 alf.nest.flatten(entropy_for_gradient))
@@ -169,24 +178,22 @@ class TRPOLoss(nn.Module):
             loss=loss,
             extra=TRPOLossInfo(td_loss=td_loss, neg_entropy=entropy_loss))
 
-    def _policy_update(self, actor_network, experience, train_info,
-                       advantages):
+    def _policy_update(self, actor_network, info, advantages):
         scope = alf.summary.scope(self.__class__.__name__)
-        policy_distribution = train_info.action_distribution
-        collect_policy_distribution = experience.rollout_info.action_distribution
-        action = experience.action
+        policy_distribution = info.action_distribution
+        collect_policy_distribution = info.rollout_action_distribution
+        action = info.action
         sample_action_log_prob = dist_utils.compute_log_probability(
             collect_policy_distribution, action).detach()
         action_log_prob = dist_utils.compute_log_probability(
             policy_distribution, action)
         importance_ratio = (action_log_prob - sample_action_log_prob).exp()
         pg_loss = -importance_ratio * advantages
-        observation = experience.observation
+        observation = info.observation
         observation = observation.reshape(-1, observation.shape[-1])
 
         def _Fvp(v):
-            action_dist, _ = actor_network(observation,
-                                           train_info.prev_actor_state)
+            action_dist, _ = actor_network(observation, info.prev_actor_state)
             normal_dist = action_dist.base_dist
             mean = normal_dist.mean
             std = normal_dist.stddev
@@ -209,8 +216,8 @@ class TRPOLoss(nn.Module):
 
         def _pg_loss(enable_grad=True):
             with torch.set_grad_enabled(enable_grad):
-                action_distribution, _ = actor_network(
-                    observation, train_info.prev_actor_state)
+                action_distribution, _ = actor_network(observation,
+                                                       info.prev_actor_state)
             action_log_prob = dist_utils.compute_log_probability(
                 policy_distribution, action)
             importance_ratio = (action_log_prob - sample_action_log_prob).exp()
@@ -275,7 +282,5 @@ class TRPOLoss(nn.Module):
                 param.size()))
             prev_ind += flat_size
 
-    def _calc_returns_and_advantages(self, experience, value):
-        advantages = experience.rollout_info.advantages
-        returns = experience.rollout_info.returns
-        return returns, advantages
+    def _calc_returns_and_advantages(self, info, value):
+        return info.returns, info.advantages

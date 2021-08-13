@@ -11,17 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-# base config for trpo (TRPOAlgorithm)
+"""This file constains basic configurations for PPO. An entropy target is
+automatically enforced for PPO's policy.
+"""
 
 import alf
-from alf.algorithms.actor_critic_algorithm import ActorCriticAlgorithm
 from alf.algorithms.agent import Agent
-from alf.algorithms.trpo_algorithm import TRPOAlgorithm
-from alf.algorithms.trpo_loss import TRPOLoss
+from alf.algorithms.trpo_algorithm import TRPOAlgorithm, TRPOLoss
 
-alf.config('Agent', rl_algorithm_cls=TRPOAlgorithm)
+alf.config(
+    'Agent', rl_algorithm_cls=TRPOAlgorithm, enforce_entropy_target=True)
 
-alf.config('ActorCriticAlgorithm', loss_class=TRPOLoss)
+alf.config('EntropyTargetAlgorithm', initial_alpha=1.)
 
-alf.config('TrainerConfig', algorithm_ctor=Agent)
+alf.config('TRPOLoss', entropy_regularization=None, normalize_advantages=True)
+
+alf.config('TRPOAlgorithm', loss_class=TRPOLoss)
+
+alf.config(
+    'TrainerConfig',
+    algorithm_ctor=Agent,
+    whole_replay_buffer_training=True,
+    clear_replay_buffer=True)

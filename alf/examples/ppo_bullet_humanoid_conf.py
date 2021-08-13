@@ -60,7 +60,7 @@ alf.config(
 
 alf.config(
     'PPOLoss',
-    entropy_regularization=1e-2,
+    # entropy_regularization=1e-2,
     gamma=0.99,
     td_lambda=0.95,
     td_error_loss_fn=element_wise_squared_loss,
@@ -74,8 +74,8 @@ alf.config(
 alf.config(
     'TrainerConfig',
     mini_batch_length=1,
-    unroll_length=512,
-    mini_batch_size=4096,
+    unroll_length=5,  #512,
+    mini_batch_size=10,  #4096,
     num_updates_per_train_iter=20,
     num_iterations=1000,
     num_checkpoints=1,
