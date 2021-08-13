@@ -16,12 +16,11 @@ from functools import partial
 import torch
 
 import alf
-from alf.algorithms.oac_algorithm import OacAlgorithm
+from alf.algorithms.sac_algorithm import SacAlgorithm
 from alf.nest.utils import NestConcat
 from alf.networks import NormalProjectionNetwork, ActorDistributionNetwork
-from alf.networks import CriticNetwork, ValueNetwork
+from alf.networks import EncodingNetwork, CriticNetwork, ValueNetwork
 from alf.optimizers import Adam, AdamTF
-from alf.utils.dist_utils import calc_default_target_entropy
 from alf.utils.math_ops import clipped_exp
 from alf.utils.losses import element_wise_squared_loss
 
@@ -29,7 +28,9 @@ from alf.examples import sac_conf
 
 # environment config
 alf.config(
-    'create_environment', env_name='Humanoid-v2', num_parallel_environments=1)
+    'create_environment',
+    env_name='HalfCheetah-v2',
+    num_parallel_environments=1)
 
 # algorithm config
 fc_layer_params = (256, 256)
@@ -41,25 +42,26 @@ actor_network_cls = partial(
         NormalProjectionNetwork,
         state_dependent_std=True,
         scale_distribution=True,
-        std_transform=partial(
-            clipped_exp, clip_value_min=-10, clip_value_max=2)))
+        std_transform=clipped_exp))
 
 critic_network_cls = partial(
     CriticNetwork, joint_fc_layer_params=fc_layer_params)
 
 value_network_cls = partial(ValueNetwork, fc_layer_params=fc_layer_params)
 
-alf.config('calc_default_target_entropy', min_prob=0.184)
+uncertainty_network_cls = partial(
+    EncodingNetwork,
+    fc_layer_params=fc_layer_params,
+    last_activation=torch.nn.functional.softplus)
 
 alf.config(
-    'OacAlgorithm',
+    'SacAlgorithm',
     actor_network_cls=actor_network_cls,
     critic_network_cls=critic_network_cls,
     value_network_cls=value_network_cls,
-    explore=True,
-    explore_delta=6.,
+    uncertainty_network_cls=uncertainty_network_cls,
     target_update_tau=0.005,
-    v_std_weight=.5,
+    uncertainty_weight=.5,
     # use_critics_mean_for_actor_train=True,
     actor_optimizer=AdamTF(lr=3e-4),
     critic_optimizer=AdamTF(lr=3e-4),
@@ -68,7 +70,7 @@ alf.config(
 alf.config('OneStepTDLoss', td_error_loss_fn=element_wise_squared_loss)
 
 # training config
-alf.config('Agent', rl_algorithm_cls=OacAlgorithm)
+alf.config('Agent', rl_algorithm_cls=SacAlgorithm)
 
 alf.config(
     'TrainerConfig',
@@ -77,7 +79,7 @@ alf.config(
     unroll_length=1,
     mini_batch_size=256,
     num_updates_per_train_iter=1,
-    num_iterations=6000000,
+    num_iterations=2500000,
     num_checkpoints=1,
     evaluate=True,
     remote_eval=True,

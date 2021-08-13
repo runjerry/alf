@@ -38,6 +38,7 @@ setup(
         'pillow==7.2.0',
         'psutil',
         'pybullet == 2.5.0',
+        'ray == 0.8.4',
         'rectangle-packer==2.0.0',
         'sphinx==2.4.4',
         'sphinx-autobuild',

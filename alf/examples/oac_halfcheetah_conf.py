@@ -18,7 +18,8 @@ import torch
 import alf
 from alf.algorithms.oac_algorithm import OacAlgorithm
 from alf.nest.utils import NestConcat
-from alf.networks import NormalProjectionNetwork, ActorDistributionNetwork, CriticNetwork
+from alf.networks import NormalProjectionNetwork, ActorDistributionNetwork
+from alf.networks import EncodingNetwork, CriticNetwork, ValueNetwork
 from alf.optimizers import Adam, AdamTF
 from alf.utils.math_ops import clipped_exp
 from alf.utils.losses import element_wise_squared_loss
@@ -46,13 +47,24 @@ actor_network_cls = partial(
 critic_network_cls = partial(
     CriticNetwork, joint_fc_layer_params=fc_layer_params)
 
+value_network_cls = partial(ValueNetwork, fc_layer_params=fc_layer_params)
+
+uncertainty_network_cls = partial(
+    EncodingNetwork,
+    fc_layer_params=fc_layer_params,
+    last_activation=torch.nn.functional.softplus)
+
 alf.config(
     'OacAlgorithm',
     actor_network_cls=actor_network_cls,
     critic_network_cls=critic_network_cls,
+    value_network_cls=value_network_cls,
+    uncertainty_network_cls=uncertainty_network_cls,
     explore=True,
     explore_delta=6.,
     target_update_tau=0.005,
+    uncertainty_weight=.5,
+    use_critics_mean_for_actor_train=False,
     actor_optimizer=AdamTF(lr=3e-4),
     critic_optimizer=AdamTF(lr=3e-4),
     alpha_optimizer=AdamTF(lr=3e-4))
@@ -75,8 +87,9 @@ alf.config(
     remote_eval=True,
     eval_interval=1000,
     num_eval_episodes=5,
-    debug_summaries=False,
+    debug_summaries=True,
     random_seed=0,
-    summarize_grads_and_vars=False,
+    summarize_grads_and_vars=True,
+    summarize_action_distributions=True,
     summary_interval=1000,
     replay_buffer_length=1000000)

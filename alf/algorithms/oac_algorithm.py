@@ -24,7 +24,7 @@ from alf.data_structures import TimeStep
 from alf.data_structures import AlgStep
 from alf.nest import nest
 import alf.nest.utils as nest_utils
-from alf.networks import ActorDistributionNetwork, CriticNetwork
+from alf.networks import ActorDistributionNetwork, CriticNetwork, ValueNetwork
 from alf.networks import QNetwork
 from alf.networks.projection_networks import NormalProjectionNetwork
 from alf.tensor_specs import TensorSpec, BoundedTensorSpec
@@ -47,6 +47,8 @@ class OacAlgorithm(SacAlgorithm):
                  actor_network_cls=ActorDistributionNetwork,
                  critic_network_cls=CriticNetwork,
                  q_network_cls=QNetwork,
+                 value_network_cls=ValueNetwork,
+                 uncertainty_network_cls=None,
                  epsilon_greedy=None,
                  use_entropy_reward=True,
                  calculate_priority=False,
@@ -58,6 +60,8 @@ class OacAlgorithm(SacAlgorithm):
                  prior_actor_ctor=None,
                  target_kld_per_dim=3.,
                  initial_log_alpha=0.0,
+                 uncertainty_weight=None,
+                 use_critics_mean_for_actor_train=False,
                  explore=True,
                  explore_delta=6.8,
                  beta_ub=4.6,
@@ -89,6 +93,8 @@ class OacAlgorithm(SacAlgorithm):
             actor_network_cls=actor_network_cls,
             critic_network_cls=critic_network_cls,
             q_network_cls=q_network_cls,
+            value_network_cls=value_network_cls,
+            uncertainty_network_cls=uncertainty_network_cls,
             epsilon_greedy=epsilon_greedy,
             use_entropy_reward=use_entropy_reward,
             calculate_priority=calculate_priority,
@@ -99,6 +105,8 @@ class OacAlgorithm(SacAlgorithm):
             target_entropy=target_entropy,
             prior_actor_ctor=prior_actor_ctor,
             initial_log_alpha=initial_log_alpha,
+            uncertainty_weight=uncertainty_weight,
+            use_critics_mean_for_actor_train=use_critics_mean_for_actor_train,
             max_log_alpha=max_log_alpha,
             target_update_tau=target_update_tau,
             target_update_period=target_update_period,
