@@ -1014,11 +1014,11 @@ class Generator(Algorithm):
             partial_idx = None
         jac_y, _ = self._net.compute_vjp(
             z_inputs, y, output_partial_idx=partial_idx)  # [N2*N, K]
+        target_vec = vec  # [N2, N, D]
         if self._force_fullrank:
             if self._block_inverse_mvp:
                 target_vec = vec[:, :, :self._noise_dim]  # [N2, N, K]
             else:
-                target_vec = vec  # [N2, N, D]
                 jac_y = torch.cat(
                     (jac_y,
                      torch.zeros(jac_y.shape[0],
