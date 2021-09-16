@@ -78,6 +78,7 @@ class HyperNetwork(Algorithm):
                  critic_l2_weight=10.,
                  functional_gradient=False,
                  fullrank_diag_weight=1.0,
+                 block_inverse_mvp=False,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
                  inverse_mvp_hidden_layers=1,
@@ -136,6 +137,9 @@ class HyperNetwork(Algorithm):
             functional_gradient (bool): whether or not to use GPVI.
             fullrank_diag_weight (float): weight on "extra" dimensions when 
                 forcing full rank Jacobian
+            block_inverse_mvp(bool): whether to use the more efficient block form
+                for inverse_mvp when ``functional_gradient`` is True. This
+                option only makes sense when ``noise_dim`` < ``output_dim``.
             inverse_mvp_solve_iters (int): number of iterations to train inverse_mvp
                 network each training iteration of generator.
             inverse_mvp_hidden_size (int): width of hidden layers of inverse_mvp 
@@ -276,6 +280,7 @@ class HyperNetwork(Algorithm):
             critic_l2_weight=critic_l2_weight,
             functional_gradient=functional_gradient,
             fullrank_diag_weight=fullrank_diag_weight,
+            block_inverse_mvp=block_inverse_mvp,
             inverse_mvp_solve_iters=inverse_mvp_solve_iters,
             inverse_mvp_hidden_size=inverse_mvp_hidden_size,
             inverse_mvp_hidden_layers=inverse_mvp_hidden_layers,

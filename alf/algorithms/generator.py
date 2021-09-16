@@ -198,7 +198,8 @@ class InverseMVPAlgorithm(Algorithm):
         """
         z_inputs, vec = inputs
         assert z_inputs.ndim == 2 and z_inputs.shape[-1] >= self._z_dim
-        assert vec.shape[-1] == self._vec_dim
+        # assert vec.shape[-1] == self._vec_dim
+        assert vec.shape[-1] >= self._vec_dim
         assert z_inputs.shape[0] == vec.shape[0]
 
         if z_inputs.shape[-1] > self._z_dim:
@@ -215,6 +216,9 @@ class InverseMVPAlgorithm(Algorithm):
             raise ValueError(
                 "vec must be dimension 2 or 3, got dimension {}".format(
                     vec.ndim))
+
+        if vec_inputs.shape[-1] > self._vec_dim:
+            vec_inputs = vec_inputs[:, :self._vec_dim]
 
         outputs = (self._net((z_inputs, vec_inputs))[0], z_inputs)
 
@@ -298,6 +302,7 @@ class Generator(Algorithm):
                  use_kernel_averager=False,
                  functional_gradient=False,
                  fullrank_diag_weight=1.0,
+                 block_inverse_mvp=False,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
                  inverse_mvp_hidden_layers=1,
@@ -363,6 +368,9 @@ class Generator(Algorithm):
                 ``fullrank_diag_weight``.  
             fullrank_diag_weight (float): weight on "extra" dimensions when 
                 forcing full rank Jacobian
+            block_inverse_mvp(bool): whether to use the more efficient block form
+                for inverse_mvp when ``functional_gradient`` is True. This
+                option only makes sense when ``noise_dim`` < ``output_dim``.
             inverse_mvp_solve_iters (int): number of iterations of inverse_mvp
                 network training per single iteration of generator training.
             inverse_mvp_hidden_size (int): width of hidden layers in inverse_mvp
@@ -430,20 +438,26 @@ class Generator(Algorithm):
                     )
                 if noise_dim == output_dim:
                     force_fullrank = False
+                    block_inverse_mvp = False
                 else:
                     assert noise_dim < output_dim
                     force_fullrank = True
                 self._grad_func = self._rkhs_func_grad
                 self._force_fullrank = force_fullrank
                 self._fullrank_diag_weight = fullrank_diag_weight
+                self._block_inverse_mvp = block_inverse_mvp
                 self._inverse_mvp_solve_iters = inverse_mvp_solve_iters
                 if inverse_mvp_optimizer is None:
                     inverse_mvp_optimizer = alf.optimizers.Adam(
                         lr=1e-4, weight_decay=1e-5)
 
+                if block_inverse_mvp:
+                    inverse_mvp_output_dim = noise_dim
+                else:
+                    inverse_mvp_output_dim = output_dim
                 self._inverse_mvp = InverseMVPAlgorithm(
                     noise_dim,
-                    output_dim,
+                    inverse_mvp_output_dim,
                     hidden_size=inverse_mvp_hidden_size,
                     num_hidden_layers=inverse_mvp_hidden_layers,
                     optimizer=inverse_mvp_optimizer)
@@ -992,18 +1006,27 @@ class Generator(Algorithm):
         Returns:
             inverse_mvp_loss (float)
         """
-        y, z_inputs = self._inverse_mvp.predict_step((z,
-                                                      vec)).output  #[N2*N, D]
-        jac_y, _ = self._net.compute_vjp(z_inputs, y)  # [N2*N, K]
+        # [N2*N, D] or [N2*N, K], [N2*N, K]
+        y, z_inputs = self._inverse_mvp.predict_step((z, vec)).output
+        if self._block_inverse_mvp:
+            partial_idx = torch.arange(self._noise_dim)
+        else:
+            partial_idx = None
+        jac_y, _ = self._net.compute_vjp(
+            z_inputs, y, output_partial_idx=partial_idx)  # [N2*N, K]
         if self._force_fullrank:
-            jac_y = torch.cat(
-                (jac_y,
-                 torch.zeros(jac_y.shape[0],
-                             self._output_dim - self._noise_dim)),
-                dim=-1)
+            if self._block_inverse_mvp:
+                target_vec = vec[:, :, :self._noise_dim]  # [N2, N, K]
+            else:
+                target_vec = vec  # [N2, N, D]
+                jac_y = torch.cat(
+                    (jac_y,
+                     torch.zeros(jac_y.shape[0],
+                                 self._output_dim - self._noise_dim)),
+                    dim=-1)
             jac_y += self._fullrank_diag_weight * y  # [N2*N, D]
         jac_y = jac_y.reshape(vec.shape[0], vec.shape[1], -1)  # [N2, N, D]
-        loss = torch.nn.functional.mse_loss(jac_y, vec)
+        loss = torch.nn.functional.mse_loss(jac_y, target_vec)
 
         return loss
 
@@ -1046,8 +1069,20 @@ class Generator(Algorithm):
                 LossInfo(loss=inverse_mvp_loss))
 
         # construct functional gradient via inverse_mvp
-        J_inv_kernel_grad, _ = self._inverse_mvp.predict_step(
+        J_inv_kernel_grad, z_inputs = self._inverse_mvp.predict_step(
             (gen_inputs2.detach(), kernel_grad.detach())).output  # [N2*N, D]
+        if self._block_inverse_mvp:  # [N2*N, K]
+            jvp, _ = self._net.compute_jvp(
+                z_inputs.detach(),
+                J_inv_kernel_grad,
+                output_partial_idx=torch.arange(
+                    start=self._noise_dim, end=self._output_dim))
+            kernel_grad_B = kernel_grad[:, :, self._noise_dim:].reshape(
+                kernel_grad.shape[0] * kernel_grad.shape[1], -1)  # [N2*N, D-K]
+            jvp = -self._fullrank_diag_weight * jvp \
+                  + kernel_grad_B / self._fullrank_diag_weight  # [N2*N, D-K]
+            J_inv_kernel_grad = torch.cat([J_inv_kernel_grad, jvp], dim=-1)
+
         J_inv_kernel_grad = J_inv_kernel_grad.reshape(
             num_particles, num_particles, -1)  # [N2, N, D]
 
