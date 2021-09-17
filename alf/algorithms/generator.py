@@ -13,9 +13,10 @@
 # limitations under the License.
 """A generic generator."""
 
+import functools
 import numpy as np
 import torch
-import functools
+from torch.autograd.functional import jacobian
 
 import alf
 from alf.algorithms.algorithm import Algorithm
@@ -303,6 +304,7 @@ class Generator(Algorithm):
                  functional_gradient=False,
                  fullrank_diag_weight=1.0,
                  block_inverse_mvp=False,
+                 direct_jac_inverse=True,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
                  inverse_mvp_hidden_layers=1,
@@ -403,6 +405,7 @@ class Generator(Algorithm):
         self._entropy_regularization = entropy_regularization
         self._functional_gradient = functional_gradient
         self._par_vi = par_vi
+        self._direct_jac_inverse = direct_jac_inverse
         if entropy_regularization == 0:
             self._grad_func = self._ml_grad
         else:
@@ -1012,6 +1015,7 @@ class Generator(Algorithm):
             partial_idx = torch.arange(self._noise_dim)
         else:
             partial_idx = None
+        # jac_y, _ = self._net.compute_jvp(
         jac_y, _ = self._net.compute_vjp(
             z_inputs, y, output_partial_idx=partial_idx)  # [N2*N, K]
         target_vec = vec  # [N2, N, D]
@@ -1061,30 +1065,35 @@ class Generator(Algorithm):
         # [N2, N], [N2, N, D]
         kernel_weight, kernel_grad = self._rbf_func2(gen_inputs2, gen_inputs)
 
-        # train inverse_mvp
-        for i in range(self._inverse_mvp_solve_iters):
-            inverse_mvp_loss = self._inverse_mvp_train_step(
-                gen_inputs2.detach(), kernel_grad.detach())
-            self._inverse_mvp.update_with_gradient(
-                LossInfo(loss=inverse_mvp_loss))
+        if self._direct_jac_inverse:
+            pass
+        else:
+            # train inverse_mvp
+            for i in range(self._inverse_mvp_solve_iters):
+                inverse_mvp_loss = self._inverse_mvp_train_step(
+                    gen_inputs2.detach(), kernel_grad.detach())
+                self._inverse_mvp.update_with_gradient(
+                    LossInfo(loss=inverse_mvp_loss))
 
-        # construct functional gradient via inverse_mvp
-        J_inv_kernel_grad, z_inputs = self._inverse_mvp.predict_step(
-            (gen_inputs2.detach(), kernel_grad.detach())).output  # [N2*N, D]
-        if self._block_inverse_mvp:  # [N2*N, K]
-            jvp, _ = self._net.compute_jvp(
-                z_inputs.detach(),
-                J_inv_kernel_grad,
-                output_partial_idx=torch.arange(
-                    start=self._noise_dim, end=self._output_dim))
-            kernel_grad_B = kernel_grad[:, :, self._noise_dim:].reshape(
-                kernel_grad.shape[0] * kernel_grad.shape[1], -1)  # [N2*N, D-K]
-            jvp = -self._fullrank_diag_weight * jvp \
-                  + kernel_grad_B / self._fullrank_diag_weight  # [N2*N, D-K]
-            J_inv_kernel_grad = torch.cat([J_inv_kernel_grad, jvp], dim=-1)
+            # construct functional gradient via inverse_mvp
+            J_inv_kernel_grad, z_inputs = self._inverse_mvp.predict_step(
+                (gen_inputs2.detach(),
+                 kernel_grad.detach())).output  # [N2*N, D]
+            if self._block_inverse_mvp:  # [N2*N, K]
+                jvp, _ = self._net.compute_jvp(
+                    z_inputs.detach(),
+                    J_inv_kernel_grad,
+                    output_partial_idx=torch.arange(
+                        start=self._noise_dim, end=self._output_dim))
+                kernel_grad_B = kernel_grad[:, :, self._noise_dim:].reshape(
+                    kernel_grad.shape[0] * kernel_grad.shape[1],
+                    -1)  # [N2*N, D-K]
+                jvp = (kernel_grad_B -
+                       jvp) / self._fullrank_diag_weight  # [N2*N, D-K]
+                J_inv_kernel_grad = torch.cat([J_inv_kernel_grad, jvp], dim=-1)
 
-        J_inv_kernel_grad = J_inv_kernel_grad.reshape(
-            num_particles, num_particles, -1)  # [N2, N, D]
+            J_inv_kernel_grad = J_inv_kernel_grad.reshape(
+                num_particles, num_particles, -1)  # [N2, N, D]
 
         loss_inputs = outputs2
         loss = loss_func(loss_inputs)

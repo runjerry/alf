@@ -58,14 +58,14 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         self.assertEqual(x.shape, y.shape)
         self.assertGreater(float(torch.min(x - y)), eps)
 
-    @parameterized.parameters(('gfsf', False), ('svgd2', False),
-                              ('svgd3', False), ('minmax', False),
-                              ('gfsf', True), ('svgd2', True), ('svgd3', True),
-                              ('svgd', False, True))
+    # @parameterized.parameters(('gfsf', False), ('svgd2', False),
+    #                           ('svgd3', False), ('minmax', False),
+    #                           ('gfsf', True), ('svgd2', True), ('svgd3', True),
+    #                           ('svgd', False, True))
     def test_bayesian_linear_regression(self,
                                         par_vi='svgd3',
                                         function_vi=False,
-                                        functional_gradient=False,
+                                        functional_gradient=True,
                                         train_batch_size=10,
                                         num_particles=128):
         r"""
@@ -80,10 +80,10 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         ``minmax``.
 
         """
-        input_size = 3
+        input_size = 10
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
-        batch_size = 50
+        batch_size = 10
         hidden_size = output_dim * batch_size
         inputs = input_spec.randn(outer_dims=(batch_size, ))
         beta = torch.rand(input_size, output_dim) + 5.
@@ -92,7 +92,9 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         targets = inputs @ beta + noise
         true_cov = torch.inverse(inputs.t() @ inputs)
         true_mean = true_cov @ inputs.t() @ targets
-        noise_dim = 3
+        noise_dim = 8
+        entropy_regularization = None
+        entropy_regularization = 1.
 
         if functional_gradient:
             hidden_layers = ()
@@ -110,17 +112,20 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             par_vi=par_vi,
             function_vi=function_vi,
             functional_gradient=functional_gradient,
+            fullrank_diag_weight=1.,
+            block_inverse_mvp=True,
             critic_hidden_layers=(hidden_size, hidden_size),
             inverse_mvp_hidden_layers=3,
             function_bs=train_batch_size,
-            optimizer=alf.optimizers.Adam(lr=2e-3),
-            inverse_mvp_optimizer=alf.optimizers.Adam(lr=1e-4),
+            optimizer=alf.optimizers.Adam(lr=1e-2),
+            inverse_mvp_optimizer=alf.optimizers.Adam(lr=1e-3),
             critic_optimizer=alf.optimizers.Adam(lr=1e-3))
         print("ground truth mean: {}".format(true_mean))
         print("ground truth cov: {}".format(true_cov))
         print("ground truth cov norm: {}".format(true_cov.norm()))
 
-        def _train(train_batch=None, entropy_regularization=None):
+        def _train(train_batch=None,
+                   entropy_regularization=entropy_regularization):
             if train_batch is None:
                 perm = torch.randperm(batch_size)
                 idx = perm[:train_batch_size]
@@ -177,7 +182,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                 scov_err = scov_err / torch.norm(true_cov)
                 print("train_iter {}: sampled cov err {}".format(i, scov_err))
 
-        train_iter = 3000
+        train_iter = 90000
         for i in range(train_iter):
             _train()
             if i % 1000 == 0:
