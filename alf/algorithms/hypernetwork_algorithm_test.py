@@ -92,9 +92,11 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
         targets = inputs @ beta + noise
         true_cov = torch.inverse(inputs.t() @ inputs)
         true_mean = true_cov @ inputs.t() @ targets
-        noise_dim = 8
+        noise_dim = 5
         entropy_regularization = None
-        entropy_regularization = 1.
+        # entropy_regularization = 1.
+
+        # if functional_gradient and noise_dim < output_dim:
 
         if functional_gradient:
             hidden_layers = ()
@@ -112,12 +114,16 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             par_vi=par_vi,
             function_vi=function_vi,
             functional_gradient=functional_gradient,
-            fullrank_diag_weight=1.,
-            block_inverse_mvp=True,
+            log_lambda=1,
+            min_log_lambda=1e-6,
+            block_inverse_mvp=False,
+            direct_jac_inverse=False,
             critic_hidden_layers=(hidden_size, hidden_size),
             inverse_mvp_hidden_layers=3,
             function_bs=train_batch_size,
-            optimizer=alf.optimizers.Adam(lr=1e-2),
+            # optimizer=alf.optimizers.Adam(lr=1e-2),
+            generator_optimizer=alf.optimizers.Adam(lr=1e-2),
+            lambda_optimizer=alf.optimizers.Adam(lr=1e-2),
             inverse_mvp_optimizer=alf.optimizers.Adam(lr=1e-3),
             critic_optimizer=alf.optimizers.Adam(lr=1e-3))
         print("ground truth mean: {}".format(true_mean))
@@ -141,6 +147,7 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                 num_particles=num_particles)
 
             loss_info, params = algorithm.update_with_gradient(alg_step.info)
+            algorithm._generator.after_update(alg_step.info)
 
         def _test(i, sampled_predictive=False):
             print("-" * 68)
@@ -182,11 +189,13 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
                 scov_err = scov_err / torch.norm(true_cov)
                 print("train_iter {}: sampled cov err {}".format(i, scov_err))
 
-        train_iter = 90000
+        train_iter = 50000
         for i in range(train_iter):
             _train()
             if i % 1000 == 0:
                 _test(i)
+                print("train_iter {}: fullrank_diag_weight {}".format(
+                    i, algorithm._generator._log_lambda))  #.exp()))
 
         learned_mean = algorithm._generator._net[0].bias
         mean_err = torch.norm(learned_mean - true_mean.squeeze())

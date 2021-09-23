@@ -77,8 +77,10 @@ class HyperNetwork(Algorithm):
                  critic_iter_num=2,
                  critic_l2_weight=10.,
                  functional_gradient=False,
-                 fullrank_diag_weight=1.0,
+                 log_lambda=0,
+                 min_log_lambda=1e-4,
                  block_inverse_mvp=False,
+                 direct_jac_inverse=False,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
                  inverse_mvp_hidden_layers=1,
@@ -94,6 +96,8 @@ class HyperNetwork(Algorithm):
                  critic_optimizer=None,
                  inverse_mvp_optimizer=None,
                  optimizer=None,
+                 generator_optimizer=None,
+                 lambda_optimizer=None,
                  logging_network=False,
                  logging_training=False,
                  logging_evaluate=False,
@@ -135,7 +139,7 @@ class HyperNetwork(Algorithm):
                 boundednesss
 
             functional_gradient (bool): whether or not to use GPVI.
-            fullrank_diag_weight (float): weight on "extra" dimensions when 
+            log_lambda (float): logarithm of the weight on "extra" dimensions when 
                 forcing full rank Jacobian
             block_inverse_mvp(bool): whether to use the more efficient block form
                 for inverse_mvp when ``functional_gradient`` is True. This
@@ -279,13 +283,16 @@ class HyperNetwork(Algorithm):
             critic_iter_num=critic_iter_num,
             critic_l2_weight=critic_l2_weight,
             functional_gradient=functional_gradient,
-            fullrank_diag_weight=fullrank_diag_weight,
+            log_lambda=log_lambda,
+            min_log_lambda=min_log_lambda,
             block_inverse_mvp=block_inverse_mvp,
+            direct_jac_inverse=direct_jac_inverse,
             inverse_mvp_solve_iters=inverse_mvp_solve_iters,
             inverse_mvp_hidden_size=inverse_mvp_hidden_size,
             inverse_mvp_hidden_layers=inverse_mvp_hidden_layers,
             inverse_mvp_optimizer=inverse_mvp_optimizer,
-            optimizer=None,
+            optimizer=generator_optimizer,
+            lambda_optimizer=lambda_optimizer,
             critic_optimizer=critic_optimizer,
             name=name)
 

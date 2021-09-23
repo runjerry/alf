@@ -199,7 +199,6 @@ class InverseMVPAlgorithm(Algorithm):
         """
         z_inputs, vec = inputs
         assert z_inputs.ndim == 2 and z_inputs.shape[-1] >= self._z_dim
-        # assert vec.shape[-1] == self._vec_dim
         assert vec.shape[-1] >= self._vec_dim
         assert z_inputs.shape[0] == vec.shape[0]
 
@@ -302,9 +301,10 @@ class Generator(Algorithm):
                  par_vi=None,
                  use_kernel_averager=False,
                  functional_gradient=False,
-                 fullrank_diag_weight=1.0,
+                 log_lambda=0.,
+                 min_log_lambda=1e-3,
                  block_inverse_mvp=False,
-                 direct_jac_inverse=True,
+                 direct_jac_inverse=False,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
                  inverse_mvp_hidden_layers=1,
@@ -318,6 +318,7 @@ class Generator(Algorithm):
                  critic_optimizer=None,
                  inverse_mvp_optimizer=None,
                  optimizer=None,
+                 lambda_optimizer=None,
                  name="Generator"):
         r"""Create a Generator.
 
@@ -368,7 +369,7 @@ class Generator(Algorithm):
                 forwarding the first ``noise_dim`` components. We then add the 
                 full noise vector to the output, multiplied by the 
                 ``fullrank_diag_weight``.  
-            fullrank_diag_weight (float): weight on "extra" dimensions when 
+            log_lambda (float): logarithm of the weight on "extra" dimensions when 
                 forcing full rank Jacobian
             block_inverse_mvp(bool): whether to use the more efficient block form
                 for inverse_mvp when ``functional_gradient`` is True. This
@@ -447,7 +448,13 @@ class Generator(Algorithm):
                     force_fullrank = True
                 self._grad_func = self._rkhs_func_grad
                 self._force_fullrank = force_fullrank
-                self._fullrank_diag_weight = fullrank_diag_weight
+                # self._log_lambda = log_lambda
+                self._log_lambda = torch.nn.Parameter(
+                    torch.tensor(float(log_lambda)))
+                self._min_log_lambda = torch.tensor(float(min_log_lambda))
+                if lambda_optimizer is not None:
+                    self.add_optimizer(lambda_optimizer,
+                                       nest.flatten(self._log_lambda))
                 self._block_inverse_mvp = block_inverse_mvp
                 self._inverse_mvp_solve_iters = inverse_mvp_solve_iters
                 if inverse_mvp_optimizer is None:
@@ -538,12 +545,16 @@ class Generator(Algorithm):
         else:
             if self._functional_gradient:
                 if self._force_fullrank:
+                    # fullrank_diag_weight = torch.exp(self._log_lambda)
+                    fullrank_diag_weight = self._log_lambda
+                    if not training:
+                        fullrank_diag_weight = fullrank_diag_weight.detach()
                     extra_noise = torch.randn(
                         noise.shape[0], self._output_dim - self._noise_dim)
                     outputs = self._net(gen_inputs)[0]  # [B, D]
                     gen_inputs = torch.cat((gen_inputs, extra_noise),
                                            dim=-1)  # [B, D]
-                    outputs = outputs + self._fullrank_diag_weight * gen_inputs
+                    outputs = outputs + fullrank_diag_weight * gen_inputs
                 else:
                     outputs = self._net(gen_inputs)[0]
             else:
@@ -1028,7 +1039,8 @@ class Generator(Algorithm):
                      torch.zeros(jac_y.shape[0],
                                  self._output_dim - self._noise_dim)),
                     dim=-1)
-            jac_y += self._fullrank_diag_weight * y  # [N2*N, D]
+            # jac_y += torch.exp(self._log_lambda).detach() * y  # [N2*N, D]
+            jac_y += self._log_lambda.detach() * y  # [N2*N, D]
         jac_y = jac_y.reshape(vec.shape[0], vec.shape[1], -1)  # [N2, N, D]
         loss = torch.nn.functional.mse_loss(jac_y, target_vec)
 
@@ -1065,8 +1077,23 @@ class Generator(Algorithm):
         # [N2, N], [N2, N, D]
         kernel_weight, kernel_grad = self._rbf_func2(gen_inputs2, gen_inputs)
 
+        # fullrank_diag_weight = torch.exp(self._log_lambda).detach()
+        fullrank_diag_weight = self._log_lambda.detach()
         if self._direct_jac_inverse:
-            pass
+            z_inputs = gen_inputs2[:, :self._noise_dim]
+            jac = self._net.compute_jac(z_inputs.detach())
+            if self._force_fullrank:
+                jac = torch.cat([
+                    jac,
+                    torch.zeros(*jac.shape[:-1],
+                                self._output_dim - self._noise_dim)
+                ],
+                                dim=-1)
+                jac += fullrank_diag_weight * torch.eye(self._output_dim)
+            jac_inv = torch.inverse(jac)  # [N2, D, D]
+            J_inv_kernel_grad = torch.einsum('bji,baj->bai', jac_inv,
+                                             kernel_grad)  # [N2, N, D]
+            inverse_mvp_loss = ()
         else:
             # train inverse_mvp
             for i in range(self._inverse_mvp_solve_iters):
@@ -1088,12 +1115,12 @@ class Generator(Algorithm):
                 kernel_grad_B = kernel_grad[:, :, self._noise_dim:].reshape(
                     kernel_grad.shape[0] * kernel_grad.shape[1],
                     -1)  # [N2*N, D-K]
-                jvp = (kernel_grad_B -
-                       jvp) / self._fullrank_diag_weight  # [N2*N, D-K]
+                jvp = (
+                    kernel_grad_B - jvp) / fullrank_diag_weight  # [N2*N, D-K]
                 J_inv_kernel_grad = torch.cat([J_inv_kernel_grad, jvp], dim=-1)
 
-            J_inv_kernel_grad = J_inv_kernel_grad.reshape(
-                num_particles, num_particles, -1)  # [N2, N, D]
+        J_inv_kernel_grad = J_inv_kernel_grad.reshape(
+            num_particles, num_particles, -1)  # [N2, N, D]
 
         loss_inputs = outputs2
         loss = loss_func(loss_inputs)
@@ -1112,5 +1139,7 @@ class Generator(Algorithm):
         return (loss, inverse_mvp_loss), loss_propagated
 
     def after_update(self, training_info):
+        self._log_lambda.data = torch.max(self._log_lambda.data,
+                                          self._min_log_lambda)
         if self._predict_net:
             self._predict_net_updater()
