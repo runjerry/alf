@@ -80,6 +80,7 @@ class HyperNetwork(Algorithm):
                  log_lambda=0,
                  min_log_lambda=1e-4,
                  block_inverse_mvp=False,
+                 dual_relu_mlp=False,
                  direct_jac_inverse=False,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
@@ -229,11 +230,12 @@ class HyperNetwork(Algorithm):
         noise_spec = TensorSpec(shape=(noise_dim, ))
 
         if functional_gradient:
-            net = ReluMLP(
-                noise_spec,
-                hidden_layers=hidden_layers,
-                output_size=gen_output_dim,
-                name='Generator')
+            net = None
+            # net = ReluMLP(
+            #     noise_spec,
+            #     hidden_layers=hidden_layers,
+            #     output_size=gen_output_dim,
+            #     name='Generator')
         else:
             net = EncodingNetwork(
                 noise_spec,
@@ -275,6 +277,7 @@ class HyperNetwork(Algorithm):
         self._generator = Generator(
             gen_output_dim,
             noise_dim=noise_dim,
+            hidden_layers=hidden_layers,
             net=net,
             entropy_regularization=entropy_regularization,
             par_vi=par_vi,
@@ -286,6 +289,7 @@ class HyperNetwork(Algorithm):
             log_lambda=log_lambda,
             min_log_lambda=min_log_lambda,
             block_inverse_mvp=block_inverse_mvp,
+            dual_relu_mlp=dual_relu_mlp,
             direct_jac_inverse=direct_jac_inverse,
             inverse_mvp_solve_iters=inverse_mvp_solve_iters,
             inverse_mvp_hidden_size=inverse_mvp_hidden_size,

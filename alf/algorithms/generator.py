@@ -23,7 +23,7 @@ from alf.algorithms.algorithm import Algorithm
 from alf.algorithms.mi_estimator import MIEstimator
 from alf.data_structures import AlgStep, LossInfo, namedtuple
 import alf.nest as nest
-from alf.networks import Network, EncodingNetwork, ReluMLP
+from alf.networks import Network, EncodingNetwork, ReluMLP, DualReluMLP
 from alf.tensor_specs import TensorSpec
 from alf.utils import common, math_ops
 from alf.utils.averager import AdaptiveAverager
@@ -304,6 +304,7 @@ class Generator(Algorithm):
                  log_lambda=0.,
                  min_log_lambda=1e-3,
                  block_inverse_mvp=False,
+                 dual_relu_mlp=False,
                  direct_jac_inverse=False,
                  inverse_mvp_solve_iters=1,
                  inverse_mvp_hidden_size=100,
@@ -448,29 +449,32 @@ class Generator(Algorithm):
                     force_fullrank = True
                 self._grad_func = self._rkhs_func_grad
                 self._force_fullrank = force_fullrank
-                # self._log_lambda = log_lambda
-                self._log_lambda = torch.nn.Parameter(
-                    torch.tensor(float(log_lambda)))
                 self._min_log_lambda = torch.tensor(float(min_log_lambda))
-                if lambda_optimizer is not None:
+                if lambda_optimizer is None:
+                    self._log_lambda = float(log_lambda)
+                else:
+                    self._log_lambda = torch.nn.Parameter(
+                        torch.tensor(float(log_lambda)))
                     self.add_optimizer(lambda_optimizer,
                                        nest.flatten(self._log_lambda))
                 self._block_inverse_mvp = block_inverse_mvp
-                self._inverse_mvp_solve_iters = inverse_mvp_solve_iters
-                if inverse_mvp_optimizer is None:
-                    inverse_mvp_optimizer = alf.optimizers.Adam(
-                        lr=1e-4, weight_decay=1e-5)
+                if not direct_jac_inverse:
+                    self._dual_relu_mlp = dual_relu_mlp
+                    self._inverse_mvp_solve_iters = inverse_mvp_solve_iters
+                    if inverse_mvp_optimizer is None:
+                        inverse_mvp_optimizer = alf.optimizers.Adam(
+                            lr=1e-4, weight_decay=1e-5)
 
-                if block_inverse_mvp:
-                    inverse_mvp_output_dim = noise_dim
-                else:
-                    inverse_mvp_output_dim = output_dim
-                self._inverse_mvp = InverseMVPAlgorithm(
-                    noise_dim,
-                    inverse_mvp_output_dim,
-                    hidden_size=inverse_mvp_hidden_size,
-                    num_hidden_layers=inverse_mvp_hidden_layers,
-                    optimizer=inverse_mvp_optimizer)
+                    if block_inverse_mvp:
+                        inverse_mvp_output_dim = noise_dim
+                    else:
+                        inverse_mvp_output_dim = output_dim
+                    self._inverse_mvp = InverseMVPAlgorithm(
+                        noise_dim,
+                        inverse_mvp_output_dim,
+                        hidden_size=inverse_mvp_hidden_size,
+                        num_hidden_layers=inverse_mvp_hidden_layers,
+                        optimizer=inverse_mvp_optimizer)
 
             if use_kernel_averager:
                 self._kernel_width_averager = AdaptiveAverager(
@@ -485,11 +489,20 @@ class Generator(Algorithm):
             if input_tensor_spec is not None:
                 net_input_spec = [net_input_spec, input_tensor_spec]
             if functional_gradient:
-                net = ReluMLP(
-                    input_tensor_spec,
-                    output_size=output_dim,
-                    hidden_layers=hidden_layers,
-                    name='Generator')
+                if block_inverse_mvp and dual_relu_mlp:
+                    net = DualReluMLP(
+                        noise_spec,
+                        output_size_1=noise_dim,
+                        output_size_2=output_dim - noise_dim,
+                        hidden_layers_1=hidden_layers,
+                        hidden_layers_2=hidden_layers,
+                        name='Generator')
+                else:
+                    net = ReluMLP(
+                        noise_spec,
+                        output_size=output_dim,
+                        hidden_layers=hidden_layers,
+                        name='Generator')
             else:
                 net = EncodingNetwork(
                     input_tensor_spec=net_input_spec,
@@ -523,6 +536,12 @@ class Generator(Algorithm):
     def noise_dim(self):
         return self._noise_dim
 
+    @property
+    def log_lambda(self):
+        return np.exp(self._log_lambda)
+        # return torch.exp(self._log_lambda)
+        # return self._log_lambda
+
     def _predict(self, inputs=None, noise=None, batch_size=None,
                  training=True):
         if inputs is None:
@@ -546,9 +565,9 @@ class Generator(Algorithm):
             if self._functional_gradient:
                 if self._force_fullrank:
                     # fullrank_diag_weight = torch.exp(self._log_lambda)
-                    fullrank_diag_weight = self._log_lambda
-                    if not training:
-                        fullrank_diag_weight = fullrank_diag_weight.detach()
+                    fullrank_diag_weight = self.log_lambda
+                    # if not training:
+                    #     fullrank_diag_weight = fullrank_diag_weight.detach()
                     extra_noise = torch.randn(
                         noise.shape[0], self._output_dim - self._noise_dim)
                     outputs = self._net(gen_inputs)[0]  # [B, D]
@@ -1022,13 +1041,21 @@ class Generator(Algorithm):
         """
         # [N2*N, D] or [N2*N, K], [N2*N, K]
         y, z_inputs = self._inverse_mvp.predict_step((z, vec)).output
-        if self._block_inverse_mvp:
-            partial_idx = torch.arange(self._noise_dim)
+
+        if self._dual_relu_mlp:
+            if self._block_inverse_mvp:
+                jac_y, _ = self._net.compute_partial_vjp(
+                    z_inputs, y, idx=1)  # [N2*N, K]
+            else:
+                jac_y, _ = self._net.compute_vjp(z_inputs, y)  # [N2*N, K]
         else:
-            partial_idx = None
-        # jac_y, _ = self._net.compute_jvp(
-        jac_y, _ = self._net.compute_vjp(
-            z_inputs, y, output_partial_idx=partial_idx)  # [N2*N, K]
+            if self._block_inverse_mvp:
+                partial_idx = torch.arange(self._noise_dim)
+            else:
+                partial_idx = None
+            jac_y, _ = self._net.compute_vjp(
+                z_inputs, y, output_partial_idx=partial_idx)  # [N2*N, K]
+
         target_vec = vec  # [N2, N, D]
         if self._force_fullrank:
             if self._block_inverse_mvp:
@@ -1039,10 +1066,11 @@ class Generator(Algorithm):
                      torch.zeros(jac_y.shape[0],
                                  self._output_dim - self._noise_dim)),
                     dim=-1)
+            jac_y += self.log_lambda * y  # [N2*N, D]
             # jac_y += torch.exp(self._log_lambda).detach() * y  # [N2*N, D]
-            jac_y += self._log_lambda.detach() * y  # [N2*N, D]
+            # jac_y += self._log_lambda.detach() * y  # [N2*N, D]
         jac_y = jac_y.reshape(vec.shape[0], vec.shape[1], -1)  # [N2, N, D]
-        loss = torch.nn.functional.mse_loss(jac_y, target_vec)
+        loss = torch.nn.functional.mse_loss(jac_y, target_vec.detach())
 
         return loss
 
@@ -1076,23 +1104,144 @@ class Generator(Algorithm):
 
         # [N2, N], [N2, N, D]
         kernel_weight, kernel_grad = self._rbf_func2(gen_inputs2, gen_inputs)
+        kernel_grad = kernel_grad.detach()
 
         # fullrank_diag_weight = torch.exp(self._log_lambda).detach()
-        fullrank_diag_weight = self._log_lambda.detach()
+        # fullrank_diag_weight = self._log_lambda.detach()
         if self._direct_jac_inverse:
-            z_inputs = gen_inputs2[:, :self._noise_dim]
-            jac = self._net.compute_jac(z_inputs.detach())
+            # direct jac inverse, no inverse_mvp needed.
+            z_inputs = gen_inputs2[:, :self._noise_dim]  # [N2, K]
+            z_inputs = z_inputs.detach()
+
+            if self._block_inverse_mvp:
+                partial_idx = torch.arange(self._noise_dim)
+            else:
+                partial_idx = None
+            jac = self._net.compute_jac(
+                z_inputs, output_partial_idx=partial_idx)
             if self._force_fullrank:
-                jac = torch.cat([
-                    jac,
-                    torch.zeros(*jac.shape[:-1],
-                                self._output_dim - self._noise_dim)
-                ],
-                                dim=-1)
-                jac += fullrank_diag_weight * torch.eye(self._output_dim)
-            jac_inv = torch.inverse(jac)  # [N2, D, D]
-            J_inv_kernel_grad = torch.einsum('bji,baj->bai', jac_inv,
-                                             kernel_grad)  # [N2, N, D]
+                if self._block_inverse_mvp:
+                    eye_dim = self._noise_dim
+                else:
+                    eye_dim = self._output_dim
+                    jac = torch.cat([
+                        jac,
+                        torch.zeros(*jac.shape[:-1],
+                                    self._output_dim - self._noise_dim)
+                    ],
+                                    dim=-1)
+                jac += self.log_lambda * torch.eye(eye_dim)
+            jac_inv = torch.inverse(jac)  # [N2, D, D] or [N2, K, K]
+            if self._force_fullrank and self._block_inverse_mvp:
+                kernel_grad_A = kernel_grad[:, :, :self._noise_dim]
+                J_inv_kernel_grad_A = torch.einsum('bij,bai->baj', jac_inv,
+                                                   kernel_grad_A)  # [N2, N, K]
+
+                kernel_grad_B = kernel_grad[:, :, self.
+                                            _noise_dim:]  # [N2, N, D-K]
+                z_inputs = torch.repeat_interleave(
+                    z_inputs, num_particles, dim=0)  # [N2*N, K]
+
+                vjp, _ = self._net.compute_vjp(
+                    z_inputs.detach(),
+                    kernel_grad.reshape(-1, kernel_grad.shape[-1]),
+                    output_partial_idx=torch.arange(
+                        start=self._noise_dim, end=self._output_dim))
+
+                vjp = vjp.reshape(num_particles, num_particles,
+                                  -1)  # [N2, N, K]
+
+                J_inv_kernel_grad_1 = J_inv_kernel_grad_A - vjp / self.log_lambda
+
+                J_inv_kernel_grad = torch.cat(
+                    [J_inv_kernel_grad_1, kernel_grad_B], dim=-1)
+            else:
+                J_inv_kernel_grad = torch.einsum('bij,bai->baj', jac_inv,
+                                                 kernel_grad)  # [N2, N, D]
+
+            # if self._force_fullrank:
+            #     if self._block_inverse_mvp:
+            #         eye_dim = self._noise_dim
+            #     else:
+            #         eye_dim = self._output_dim
+            #         jac = torch.cat(
+            #             [jac, torch.zeros(*jac.shape[:-1],
+            #                               self._output_dim - self._noise_dim)],
+            #             dim=-1)
+            #     jac += fullrank_diag_weight * torch.eye(eye_dim)
+            # jac_inv = torch.inverse(jac)  # [N2, D, D] or [N2, K, K]
+            # if self._force_fullrank and self._block_inverse_mvp:
+            #     kernel_grad_A = kernel_grad[:, :, :self._noise_dim]
+            #     J_inv_kernel_grad_A = torch.einsum(
+            #         'bij,bai->baj', jac_inv, kernel_grad_A)  # [N2, N, K]
+            #     z_inputs = torch.repeat_interleave(
+            #         z_inputs, num_particles, dim=0)  # [N2*N, K]
+            #     jvp, _ = self._net.compute_jvp(
+            #         z_inputs.detach(),
+            #         J_inv_kernel_grad_A.reshape(-1, self._noise_dim),
+            #         output_partial_idx=torch.arange(
+            #             start=self._noise_dim, end=self._output_dim))
+            #     jvp = jvp.reshape(
+            #         num_particles, num_particles, -1)  # [N2, N, D-K]
+            #     kernel_grad_B = kernel_grad[:, :, self._noise_dim:]  # [N2, N, D-K]
+            #     jvp = (
+            #         kernel_grad_B - jvp) / fullrank_diag_weight  # [N2, N, D-K]
+            #     J_inv_kernel_grad = torch.cat([J_inv_kernel_grad_A, jvp], dim=-1)
+            # else:
+            #     J_inv_kernel_grad = torch.einsum('bij,bai->baj', jac_inv,
+            #                                      kernel_grad)  # [N2, N, D]
+
+            # partial_idx_1 = torch.arange(self._noise_dim)
+            # partial_idx_2 = torch.arange(start=self._noise_dim, end=self._output_dim)
+            # jac_a1 = self._net.compute_jac(z_inputs.detach(),
+            #                                output_partial_idx=partial_idx_1)
+            # jac_b1 = self._net.compute_jac(z_inputs.detach(),
+            #                                output_partial_idx=partial_idx_2)
+
+            # jac_2 = self._net.compute_jac(z_inputs)
+            # jac_a2 = jac_2[:, :self._noise_dim, :].detach().clone()
+            # jac_b2 = jac_2[:, self._noise_dim:, :].detach().clone()
+
+            # err1 = torch.abs(jac_a1 - jac_a2)
+            # err2 = torch.abs(jac_b1 - jac_b2)
+            # if torch.max(err1) > 1e-6:
+            #     print("partial jacobian A deviation!")
+
+            # if torch.max(err2) > 1e-6:
+            #     print("partial jacobian B deviation!")
+
+            # jac_1a = jac_a1
+            # jac_1b = jac_b1
+
+            # if self._force_fullrank:
+            #     jac_1a += fullrank_diag_weight * torch.eye(self._noise_dim)
+            #     jac_1a_inv = torch.inverse(jac_1a)
+            #     jac_1b = torch.einsum('bji, bik->bjk', jac_1b, jac_1a_inv)
+            #     jac_1b = -jac_1b / fullrank_diag_weight
+            #     jac_1 = torch.cat([jac_1a_inv, jac_1b], dim=1)
+            #     jac_1c = torch.cat(
+            #         [torch.zeros(
+            #             self._noise_dim, self._output_dim - self._noise_dim),
+            #          torch.eye(
+            #              self._output_dim - self._noise_dim)/fullrank_diag_weight],
+            #         dim=0)
+            #     jac_1c = jac_1c.unsqueeze(0).repeat_interleave(num_particles, dim=0)
+            #     jac_1_inv = torch.cat([jac_1, jac_1c], dim=-1)
+            #     jac_2 = torch.cat(
+            #         [jac_2, torch.zeros(*jac_2.shape[:-1],
+            #                             self._output_dim - self._noise_dim)],
+            #         dim=-1)
+            #     jac_2 += fullrank_diag_weight * torch.eye(self._output_dim)
+            #     jac_2_inv = torch.inverse(jac_2)
+
+            #     err = torch.abs(jac_1_inv - jac_2_inv)
+            #     max_err = torch.max(err)
+            #     if torch.max(err) > 1e-5:
+            #         print("max jac inv err is:{}".format(torch.max(err)))
+
+            #     J_inv_kernel_grad = torch.einsum('bij,bai->baj', jac_1_inv,
+            #                                      kernel_grad)
+
             inverse_mvp_loss = ()
         else:
             # train inverse_mvp
@@ -1107,11 +1256,17 @@ class Generator(Algorithm):
                 (gen_inputs2.detach(),
                  kernel_grad.detach())).output  # [N2*N, D]
             if self._block_inverse_mvp:  # [N2*N, K]
-                jvp, _ = self._net.compute_jvp(
-                    z_inputs.detach(),
-                    J_inv_kernel_grad,
-                    output_partial_idx=torch.arange(
-                        start=self._noise_dim, end=self._output_dim))
+
+                if self._dual_relu_mlp:
+                    jvp, _ = self._net.compute_partial_jvp(
+                        z_inputs.detach(), J_inv_kernel_grad, idx=2)
+                else:
+                    jvp, _ = self._net.compute_jvp(
+                        z_inputs.detach(),
+                        J_inv_kernel_grad,
+                        output_partial_idx=torch.arange(
+                            start=self._noise_dim, end=self._output_dim))
+
                 kernel_grad_B = kernel_grad[:, :, self._noise_dim:].reshape(
                     kernel_grad.shape[0] * kernel_grad.shape[1],
                     -1)  # [N2*N, D-K]
@@ -1119,8 +1274,8 @@ class Generator(Algorithm):
                     kernel_grad_B - jvp) / fullrank_diag_weight  # [N2*N, D-K]
                 J_inv_kernel_grad = torch.cat([J_inv_kernel_grad, jvp], dim=-1)
 
-        J_inv_kernel_grad = J_inv_kernel_grad.reshape(
-            num_particles, num_particles, -1)  # [N2, N, D]
+            J_inv_kernel_grad = J_inv_kernel_grad.reshape(
+                num_particles, num_particles, -1)  # [N2, N, D]
 
         loss_inputs = outputs2
         loss = loss_func(loss_inputs)
@@ -1139,7 +1294,7 @@ class Generator(Algorithm):
         return (loss, inverse_mvp_loss), loss_propagated
 
     def after_update(self, training_info):
-        self._log_lambda.data = torch.max(self._log_lambda.data,
-                                          self._min_log_lambda)
+        # self._log_lambda.data = torch.max(self._log_lambda.data,
+        #                                   self._min_log_lambda)
         if self._predict_net:
             self._predict_net_updater()

@@ -86,7 +86,6 @@ class ReluMLP(Network):
         if self._output_size is None:
             self._output_size = self._input_size
         self._hidden_layers = hidden_layers
-        self._n_hidden_layers = len(hidden_layers)
 
         self._fc_layers = nn.ModuleList()
         input_size = self._input_size
@@ -132,32 +131,51 @@ class ReluMLP(Network):
 
         return z, state
 
-    def compute_jac(self, inputs):
-        """Compute the input-output Jacobian. """
+    def compute_jac(self, inputs, output_partial_idx=None):
+        """Compute the input-output Jacobian, support partial output.
+
+        Args:
+            inputs (Tensor): size (self._input_size) or (B, self._input_size)
+            output_partial_idx (list): list of output indices for taking
+                partial output-input Jacobian. Default is ``None``, where
+                standard full output-input Jacobian will be used.
+
+        Returns:
+            Jacobian (Tensor): shape (out_size, in_size) or (B, out_size, in_size), 
+                where ``out_size`` is self._output_size if ``output_partial_idx`` 
+                is None, ``len(output_partial_idx)`` otherwise.
+        """
 
         assert inputs.ndim <= 2 and inputs.shape[-1] == self._input_size, \
             ("inputs should has shape {}!".format(self._input_size))
 
         self.forward(inputs)
-        J = self._compute_jac()
+        J = self._compute_jac(output_partial_idx=output_partial_idx)
         if inputs.ndim == 1:
             J = J.squeeze(0)
 
         return J
 
-    def _compute_jac(self):
+    def _compute_jac(self, output_partial_idx=None):
         """Compute the input-output Jacobian. """
+
+        if output_partial_idx is None:
+            output_partial_idx = torch.arange(self._output_size)
 
         if len(self._fc_layers) > 1:
             mask = (self._fc_layers[-2].hidden_neurons > 0).float()
-            J = torch.einsum('ia,ba,aj->bij', self._fc_layers[-1].weight, mask,
-                             self._fc_layers[-2].weight)
+            J = torch.einsum('ia,ba,aj->bij',
+                             self._fc_layers[-1].weight[output_partial_idx, :],
+                             mask, self._fc_layers[-2].weight)
             for fc in reversed(self._fc_layers[0:-2]):
                 mask = (fc.hidden_neurons > 0).float()
                 J = torch.einsum('bia,ba,aj->bij', J, mask, fc.weight)
         else:
             mask = torch.ones_like(self._fc_layers[-1].hidden_neurons)
-            J = torch.einsum('ji, bj->bji', self._fc_layers[-1].weight, mask)
+            mask = mask[:, output_partial_idx]
+            J = torch.einsum('ji, bj->bji',
+                             self._fc_layers[-1].weight[output_partial_idx, :],
+                             mask)
 
         return J  # [B, n_out, n_in]
 
@@ -178,7 +196,7 @@ class ReluMLP(Network):
         """Compute diagonals of the input-output Jacobian. """
 
         mask = (self._fc_layers[-2].hidden_neurons > 0).float()
-        if self._n_hidden_layers == 1:
+        if len(self._hidden_layers) == 1:
             J = torch.einsum('ia,ba,ai->bi', self._fc_layers[-1].weight, mask,
                              self._fc_layers[0].weight)  # [B, n]
         else:
@@ -208,6 +226,7 @@ class ReluMLP(Network):
 
         Returns:
             vjp (Tensor): shape (self._input_size) or (B, self._input_size).
+            outputs (Tensor): outputs of the ReluMLP
         """
 
         ndim = inputs.ndim
@@ -268,6 +287,7 @@ class ReluMLP(Network):
             jvp (Tensor): shape (out_size) or (B, out_size), where ``out_size``
                 is self._output_size if ``output_partial_idx`` is None, 
                 ``len(output_partial_idx)`` otherwise.
+            outputs (Tensor): outputs of the ReluMLP
         """
 
         ndim = inputs.ndim
@@ -316,3 +336,138 @@ class ReluMLP(Network):
             J = J.squeeze(0)
 
         return J  # [B, n_out] or [n_out]
+
+
+@alf.configurable
+class DualReluMLP(Network):
+    """
+    A Network consisting of two parallel ReluMLP. """
+
+    def __init__(self,
+                 input_tensor_spec,
+                 output_size_1=None,
+                 output_size_2=None,
+                 hidden_layers_1=(64, 64),
+                 hidden_layers_2=(64, 64),
+                 name="DualReluMLP"):
+        """Create a DualReluMLP.
+
+        Args:
+            input_tensor_spec (TensorSpec):
+            output_size_1 (int): output dimension of the first ReluMLP.
+            output_size_2 (int): output dimension of the second ReluMLP.
+            hidden_layers_1 (tuple): size of hidden layers for the first ReluMLP.
+            hidden_layers_2 (tuple): size of hidden layers for the second ReluMLP.
+            name (str):
+        """
+        assert len(input_tensor_spec.shape) == 1, \
+            ("The input shape {} should be a 1-d vector!".format(
+                input_tensor_spec.shape
+            ))
+
+        super().__init__(input_tensor_spec, name=name)
+
+        self._input_size = input_tensor_spec.shape[0]
+
+        if output_size_1 is None:
+            output_size_1 = input_size_1
+        if output_size_2 is None:
+            output_size_2 = input_size_2
+        self._output_size = output_size_1 + output_size_2
+
+        self._net_1 = ReluMLP(
+            input_tensor_spec,
+            output_size=output_size_1,
+            hidden_layers=hidden_layers_1,
+            name="ReluMLP_1")
+        self._net_2 = ReluMLP(
+            input_tensor_spec,
+            output_size=output_size_2,
+            hidden_layers=hidden_layers_2,
+            name="ReluMLP_2")
+
+    def forward(self,
+                inputs,
+                state=(),
+                requires_jac=False,
+                requires_jac_diag=False):
+        """
+        Args:
+            inputs (torch.Tensor)
+            state: not used
+            requires_jac (bool): whether outputs input-output Jacobian.
+            requires_jac_diag (bool): whetheer outputs diagonals of Jacobian.
+        """
+        ndim = inputs.ndim
+        if ndim == 1:
+            inputs = inputs.unsqueeze(0)
+        assert inputs.ndim == 2 and inputs.shape[-1] == self._input_size, \
+            ("inputs should has shape (B, {})!".format(self._input_size))
+
+        z1, _ = self._net_1(inputs)
+        z2, _ = self._net_2(inputs)
+        z = torch.cat([z1, z2], dim=-1)
+
+        if requires_jac:
+            z = (z, self._compute_jac())
+        elif requires_jac_diag:
+            z = (z, self._compute_jac_diag())
+
+        return z, state
+
+    def compute_partial_jac(self, inputs, idx=1):
+        """Compute the input-output Jacobian.
+
+        Args:
+            inputs (Tensor): size (self._input_size) or (B, self._input_size)
+            idx (int): can be 1 or 2, indicating which member net to be used for
+                for computing jac.
+
+        Returns:
+            Jacobian (Tensor): shape (out_size, in_size) or (B, out_size, in_size)
+        """
+        assert idx in [1, 2], "idx has to be 1 or 2."
+        if idx == 1:
+            return self._net_1.compute_jac(inputs)
+        else:
+            return self._net_2.compute_jac(inputs)
+
+    def compute_partial_vjp(self, inputs, vec, idx=1):
+        """Compute vector-Jacobian product, support partial output-input Jacobian.
+
+        Args:
+            inputs (Tensor): size (self._input_size) or (B, self._input_size)
+            vec (Tensor): the vector for which the vector-Jacobian product
+                is computed. Must be of size (self._output_size) or
+                (B, self._output_size).
+            idx (int): can be 1 or 2, indicating which member net to be used for
+                for computing vjp.
+
+        Returns:
+            vjp (Tensor): shape (self._input_size) or (B, self._input_size).
+        """
+        assert idx in [1, 2], "idx has to be 1 or 2."
+        if idx == 1:
+            return self._net_1.compute_vjp(inputs, vec)
+        else:
+            return self._net_2.compute_vjp(inputs, vec)
+
+    def compute_partial_jvp(self, inputs, vec, idx=1):
+        """Compute Jacobian-vector product, support partial output-input Jacobian.
+
+        Args:
+            inputs (Tensor): size (self._input_size) or (B, self._input_size)
+            vec (Tensor): the vector for which the Jacobian-vector product
+                is computed. Must be of size (self._input_size) or
+                (B, self._input_size).
+            idx (int): can be 1 or 2, indicating which member net to be used for
+                for computing jvp.
+
+        Returns:
+            jvp (Tensor): shape (out_size) or (B, out_size)
+        """
+        assert idx in [1, 2], "idx has to be 1 or 2."
+        if idx == 1:
+            return self._net_1.compute_jvp(inputs, vec)
+        else:
+            return self._net_2.compute_jvp(inputs, vec)

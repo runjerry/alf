@@ -81,18 +81,22 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
 
         """
         input_size = 10
+        noise_dim = 6
+        block_inverse_mvp = True
+        dual_relu_mlp = False
         input_spec = TensorSpec((input_size, ), torch.float32)
         output_dim = 1
         batch_size = 10
         hidden_size = output_dim * batch_size
+        # inputs = torch.rand(batch_size, input_size)
         inputs = input_spec.randn(outer_dims=(batch_size, ))
-        beta = torch.rand(input_size, output_dim) + 5.
+        beta = 2 * torch.rand(input_size, output_dim) - 1.
+        # beta = torch.rand(input_size, output_dim) + 5.
         print("beta: {}".format(beta))
         noise = torch.randn(batch_size, output_dim)
         targets = inputs @ beta + noise
         true_cov = torch.inverse(inputs.t() @ inputs)
         true_mean = true_cov @ inputs.t() @ targets
-        noise_dim = 5
         entropy_regularization = None
         # entropy_regularization = 1.
 
@@ -114,16 +118,17 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             par_vi=par_vi,
             function_vi=function_vi,
             functional_gradient=functional_gradient,
-            log_lambda=1,
-            min_log_lambda=1e-6,
-            block_inverse_mvp=False,
-            direct_jac_inverse=False,
+            log_lambda=0,
+            min_log_lambda=1e-4,
+            block_inverse_mvp=block_inverse_mvp,
+            dual_relu_mlp=dual_relu_mlp,
+            direct_jac_inverse=True,
             critic_hidden_layers=(hidden_size, hidden_size),
             inverse_mvp_hidden_layers=3,
             function_bs=train_batch_size,
             # optimizer=alf.optimizers.Adam(lr=1e-2),
             generator_optimizer=alf.optimizers.Adam(lr=1e-2),
-            lambda_optimizer=alf.optimizers.Adam(lr=1e-2),
+            # lambda_optimizer=alf.optimizers.Adam(lr=1e-3),
             inverse_mvp_optimizer=alf.optimizers.Adam(lr=1e-3),
             critic_optimizer=alf.optimizers.Adam(lr=1e-3))
         print("ground truth mean: {}".format(true_mean))
@@ -151,12 +156,41 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
 
         def _test(i, sampled_predictive=False):
             print("-" * 68)
-            weight = algorithm._generator._net[0].weight
-            learned_cov = weight @ weight.t()
+
+            if noise_dim == input_size:
+                weight = algorithm._generator._net[0].weight
+                learned_cov = weight @ weight.t()
+            else:
+                if block_inverse_mvp and dual_relu_mlp:
+                    w1 = algorithm._generator._net._net_1[0].weight
+                    w2 = algorithm._generator._net._net_2[0].weight
+                    weight = torch.cat([w1, w2], dim=0)
+                else:
+                    weight = algorithm._generator._net[0].weight
+                    w1 = weight[:noise_dim, :]
+                    w2 = weight[noise_dim:, :]
+                # w1 = weight[:noise_dim, :]
+                # w2 = weight[noise_dim:, :]
+                cov_11 = w1 @ w1.t() + w1 + w1.t()  # [k, k]
+                cov_12 = w1 @ w2.t() + w2.t()  # [k, d-k]
+                cov_21 = w2 @ w1.t() + w2  # [d-k, k]
+                cov_22 = w2 @ w2.t()  # [d-k, d-k]
+                cov_1 = torch.cat([cov_11, cov_12], dim=1)  # [k, d]
+                cov_2 = torch.cat([cov_21, cov_22], dim=1)  # [k, d]
+                cov = torch.cat([cov_1, cov_2], dim=0)  # [d, d]
+                learned_cov = cov + algorithm._generator.log_lambda * torch.eye(
+                    input_size)
+
             print("norm of generator weight: {}".format(weight.norm()))
             print("norm of learned_cov: {}".format(learned_cov.norm()))
 
-            learned_mean = algorithm._generator._net[0].bias
+            if noise_dim < input_size and block_inverse_mvp and dual_relu_mlp:
+                bias1 = algorithm._generator._net._net_1[0].bias
+                bias2 = algorithm._generator._net._net_2[0].bias
+                learned_mean = torch.cat([bias1, bias2], dim=0)
+            else:
+                learned_mean = algorithm._generator._net[0].bias
+            # learned_mean = algorithm._generator._net[0].bias
             predicts = inputs @ learned_mean  # [batch]
             pred_err = torch.norm(predicts - targets.squeeze())
             print("train_iter {}: pred err {}".format(i, pred_err))
@@ -195,13 +229,42 @@ class HyperNetworkTest(parameterized.TestCase, alf.test.TestCase):
             if i % 1000 == 0:
                 _test(i)
                 print("train_iter {}: fullrank_diag_weight {}".format(
-                    i, algorithm._generator._log_lambda))  #.exp()))
+                    i, algorithm._generator.log_lambda))  #.exp()))
 
-        learned_mean = algorithm._generator._net[0].bias
+        if noise_dim < input_size and block_inverse_mvp and dual_relu_mlp:
+            bias1 = algorithm._generator._net._net_1[0].bias
+            bias2 = algorithm._generator._net._net_2[0].bias
+            learned_mean = torch.cat([bias1, bias2], dim=0)
+        else:
+            learned_mean = algorithm._generator._net[0].bias
+        # learned_mean = algorithm._generator._net[0].bias
         mean_err = torch.norm(learned_mean - true_mean.squeeze())
         mean_err = mean_err / torch.norm(true_mean)
-        weight = algorithm._generator._net[0].weight
-        learned_cov = weight @ weight.t()
+
+        if noise_dim == input_size:
+            weight = algorithm._generator._net[0].weight
+            learned_cov = weight @ weight.t()
+        else:
+            if block_inverse_mvp and dual_relu_mlp:
+                w1 = algorithm._generator._net._net_1[0].weight
+                w2 = algorithm._generator._net._net_2[0].weight
+                weight = torch.cat([w1, w2], dim=0)
+            else:
+                weight = algorithm._generator._net[0].weight
+                w1 = weight[:noise_dim, :]
+                w2 = weight[noise_dim:, :]
+            # w1 = weight[:noise_dim, :]
+            # w2 = weight[noise_dim:, :]
+            cov_11 = w1 @ w1.t() + w1 + w1.t()  # [k, k]
+            cov_12 = w1 @ w2.t() + w2.t()  # [k, d-k]
+            cov_21 = w2 @ w1.t() + w2  # [d-k, k]
+            cov_22 = w2 @ w2.t()  # [d-k, d-k]
+            cov_1 = torch.cat([cov_11, cov_12], dim=1)  # [k, d]
+            cov_2 = torch.cat([cov_21, cov_22], dim=1)  # [k, d]
+            cov = torch.cat([cov_1, cov_2], dim=0)  # [d, d]
+            learned_cov = cov + algorithm._generator.log_lambda * torch.eye(
+                input_size)
+
         cov_err = torch.norm(learned_cov - true_cov)
         cov_err = cov_err / torch.norm(true_cov)
         print("-" * 68)
