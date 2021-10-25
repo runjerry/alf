@@ -394,11 +394,12 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
 
         # test parallel forward
         weight = torch.randn(n, pfc.weight_length)
-        pfc.set_weight(weight)
-        weight = weight.view(n, output_size, input_size)
+        params = weight
         if use_bias:
             bias = torch.randn(n, pfc.bias_length)
-            pfc.set_bias(bias)
+            params = torch.cat([params, bias], dim=-1)
+        pfc.set_parameters(params)
+        weight = weight.view(n, output_size, input_size)
 
         n_inputs = inputs.unsqueeze(1).expand(batch_size, n, input_size)
         p_outs = pfc(inputs)
@@ -455,12 +456,13 @@ class LayersTest(parameterized.TestCase, alf.test.TestCase):
 
         # test parallel forward
         weight = torch.randn(n, pconv.weight_length)
-        pconv.set_weight(weight)
+        params = weight
         weight = weight.view(n, out_channels, in_channels, kernel_size,
                              kernel_size)
         if use_bias:
             bias = torch.randn(n, pconv.bias_length)
-            pconv.set_bias(bias)
+            params = torch.cat([params, bias], dim=-1)
+        pconv.set_parameters(params)
         images = image.repeat(1, n, 1, 1)
         p_outs = pconv(image)
         p_n_outs = pconv(images)

@@ -1742,13 +1742,24 @@ class ParamFC(nn.Module):
         """Get the n_element of a single bias tensor. """
         return self._bias_length
 
+    @property
+    def param_length(self):
+        return self._weight_length + self._bias_length
+
+    def set_parameters(self, theta, reinitialize=False):
+        self.set_weight(
+            theta[:, :self.weight_length], reinitialize=reinitialize)
+        if self.bias is not None:
+            self.set_bias(
+                theta[:, self.weight_length:], reinitialize=reinitialize)
+
     def set_weight(self, weight, reinitialize=False):
         """Store a weight tensor or batch of weight tensors.
 
         Args:
-            weight (torch.Tensor): with shape ``[B, D]``
+            weight (torch.Tensor): with shape ``[n, D]``
                 where the mining of the symbols are:
-                - ``B``: batch size
+                - ``n``: number of replica (groups)
                 - ``D``: length of weight vector, should be self._weight_length
             reinitialize (bool): whether to reinitialize self._weight
         """
@@ -1773,9 +1784,9 @@ class ParamFC(nn.Module):
         """Store a bias tensor or batch of bias tensors.
 
         Args:
-            bias (torch.Tensor): with shape ``[B, D]``
+            bias (torch.Tensor): with shape ``[n, D]``
                 where the mining of the symbols are:
-                - ``B``: batch size
+                - ``n``: number of replica (groups)
                 - ``D``: length of bias vector, should be self._bias_length
             reinitialize (bool): whether to reinitialize self._bias
         """
@@ -1919,13 +1930,24 @@ class ParamConv2D(nn.Module):
         """Get the n_element of a single bias tensor. """
         return self._bias_length
 
+    @property
+    def param_length(self):
+        return self._weight_length + self._bias_length
+
+    def set_parameters(self, theta, reinitialize=False):
+        self.set_weight(
+            theta[:, :self.weight_length], reinitialize=reinitialize)
+        if self.bias is not None:
+            self.set_bias(
+                theta[:, self.weight_length:], reinitialize=reinitialize)
+
     def set_weight(self, weight, reinitialize=False):
         """Store a weight tensor or batch of weight tensors.
 
         Args:
-            weight (torch.Tensor): with shape ``[B, D]``
+            weight (torch.Tensor): with shape ``[n, D]``
                 where the mining of the symbols are:
-                - ``B``: batch size
+                - ``n``: number of replica (groups)
                 - ``D``: length of weight vector, should be self._weight_length
             reinitialize (bool): whether to reinitialize self._weight
         """
@@ -1963,9 +1985,9 @@ class ParamConv2D(nn.Module):
         """Store a bias tensor or batch of bias tensors.
 
         Args:
-            bias (torch.Tensor): with shape ``[B, D]``
+            bias (torch.Tensor): with shape ``[n, D]``
                 where the mining of the symbols are:
-                - ``B``: batch size
+                - ``n``: number of replica (groups)
                 - ``D``: length of bias vector, should be self._bias_length
             reinitialize (bool): whether to reinitialize self._bias
         """

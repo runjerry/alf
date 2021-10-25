@@ -55,7 +55,6 @@ alf.config(
     explore=True,
     explore_delta=6.,
     target_update_tau=0.005,
-    use_parallel_network=True,
     actor_optimizer=AdamTF(lr=3e-4),
     critic_optimizer=AdamTF(lr=3e-4),
     alpha_optimizer=AdamTF(lr=3e-4))
@@ -77,8 +76,8 @@ alf.config(
     evaluate=True,
     eval_interval=10,
     num_eval_episodes=5,
-    debug_summaries=False,
+    debug_summaries=True,
     random_seed=0,
-    summarize_grads_and_vars=False,
+    summarize_grads_and_vars=True,
     summary_interval=1,
     replay_buffer_length=1000000)

@@ -26,7 +26,7 @@ from alf.algorithms.algorithm import Algorithm
 from alf.algorithms.config import TrainerConfig
 from alf.algorithms.particle_vi_algorithm import ParVIAlgorithm
 from alf.data_structures import AlgStep, LossInfo, namedtuple
-from alf.networks import EncodingNetwork, ParamNetwork
+from alf.networks import EncodingNetwork, Network, ParamNetwork
 from alf.tensor_specs import TensorSpec
 from alf.nest.utils import get_outer_rank
 from alf.utils import common, math_ops, summary_utils
@@ -77,7 +77,7 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
                  input_tensor_spec=None,
                  output_dim=None,
                  use_bias_for_last_layer=True,
-                 param_net: ParamNetwork = None,
+                 param_net: Network = None,
                  conv_layer_params=None,
                  fc_layer_params=None,
                  activation=torch.relu_,
@@ -191,18 +191,15 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
                 output_dim = len(trainset.dataset.classes)
             else:
                 output_dim = num_train_classes
-            input_tensor_spec = input_tensor_spec
         else:
-            assert input_tensor_spec is not None and output_dim is not None, (
-                "input_tensor_spec and output_dim need to be provided if "
-                "data_creator is not provided")
             self._train_loader = None
             self._test_loader = None
 
-        last_layer_param = (output_dim, use_bias_for_last_layer)
-
         if param_net is None:
-            assert input_tensor_spec is not None
+            assert input_tensor_spec is not None and output_dim is not None, (
+                "input_tensor_spec and output_dim need to be provided if "
+                "both data_creator param_net are not provided")
+            last_layer_param = (output_dim, use_bias_for_last_layer)
             param_net = ParamNetwork(
                 input_tensor_spec=input_tensor_spec,
                 conv_layer_params=conv_layer_params,
@@ -289,6 +286,9 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
         else:
             self._outlier_train_loader = self._outlier_test_loader = None
 
+    def reset_param_net(self, params):
+        self._param_net.set_parameters(params)
+
     def predict_step(self, inputs, params=None, state=None):
         """Predict ensemble outputs for inputs using the hypernetwork model.
 
@@ -348,6 +348,7 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
     def train_step(self,
                    inputs,
                    entropy_regularization=None,
+                   loss_func=None,
                    loss_mask=None,
                    state=None):
         """Perform one batch of training computation.
@@ -356,6 +357,10 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
             inputs (nested Tensor): input training data.
             entropy_regularization (float): weight of the repulsive term in par_vi.
                 If None, use self._entropy_regularization.
+            loss_func (Callable): loss_func(loss_inputs) returns a Tensor or
+                namedtuple of tensors with field `loss`, which is a Tensor of
+                shape [num_particles] providing a loss term for optimizing the 
+                generator.
             loss_mask (Tensor): mask indicating which samples are valid for
                 loss propagation.
             state (None): not used
@@ -369,18 +374,25 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
         if entropy_regularization is None:
             entropy_regularization = self._entropy_regularization
 
-        if self._function_vi:
-            data, target = inputs
-            return super().train_step(
-                loss_func=functools.partial(self._function_neglogprob, target),
-                transform_func=functools.partial(self._function_transform,
-                                                 data),
-                entropy_regularization=entropy_regularization,
-                loss_mask=loss_mask,
-                state=())
+        if loss_func is None:
+            if self._function_vi:
+                data, target = inputs
+                return super().train_step(
+                    loss_func=functools.partial(self._function_neglogprob,
+                                                target),
+                    transform_func=functools.partial(self._function_transform,
+                                                     data),
+                    entropy_regularization=entropy_regularization,
+                    loss_mask=loss_mask,
+                    state=())
+            else:
+                return super().train_step(
+                    loss_func=functools.partial(self._neglogprob, inputs),
+                    entropy_regularization=entropy_regularization,
+                    state=())
         else:
             return super().train_step(
-                loss_func=functools.partial(self._neglogprob, inputs),
+                loss_func=loss_func,
                 entropy_regularization=entropy_regularization,
                 state=())
 

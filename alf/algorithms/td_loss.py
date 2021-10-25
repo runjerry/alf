@@ -105,8 +105,8 @@ class TDLoss(nn.Module):
         """
         return self._gamma.clone()
 
-    def forward(self, info, value, target_value):
-        """Calculate the loss.
+    def compute_td_target(self, info, target_value):
+        """Calculate the td target.
 
         The first dimension of all the tensors is time dimension and the second
         dimesion is the batch dimension.
@@ -118,13 +118,11 @@ class TDLoss(nn.Module):
                 - reward:
                 - step_type:
                 - discount:
-            value (torch.Tensor): the time-major tensor for the value at each time
-                step. The loss is between this and the calculated return.
             target_value (torch.Tensor): the time-major tensor for the value at
                 each time step. This is used to calculate return. ``target_value``
                 can be same as ``value``.
         Returns:
-            LossInfo: with the ``extra`` field same as ``loss``.
+            td_target
         """
         if info.reward.ndim == 3:
             # [T, B, D] or [T, B, 1]
@@ -153,6 +151,31 @@ class TDLoss(nn.Module):
                 discounts=discounts,
                 td_lambda=self._lambda)
             returns = advantages + target_value[:-1]
+
+        return returns
+
+    def forward(self, info, value, target_value):
+        """Calculate the loss.
+
+        The first dimension of all the tensors is time dimension and the second
+        dimesion is the batch dimension.
+
+        Args:
+            info (namedtuple): experience collected from ``unroll()`` or
+                a replay buffer. All tensors are time-major. ``info`` should
+                contain the following fields:
+                - reward:
+                - step_type:
+                - discount:
+            value (torch.Tensor): the time-major tensor for the value at each time
+                step. The loss is between this and the calculated return.
+            target_value (torch.Tensor): the time-major tensor for the value at
+                each time step. This is used to calculate return. ``target_value``
+                can be same as ``value``.
+        Returns:
+            LossInfo: with the ``extra`` field same as ``loss``.
+        """
+        returns = self.compute_td_target(info, target_value)
 
         value = value[:-1]
         if self._normalize_target:
