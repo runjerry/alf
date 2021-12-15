@@ -55,6 +55,7 @@ from absl import flags
 from absl import logging
 import os
 import pathlib
+import ray
 import sys
 import torch
 import torch.distributed as dist
@@ -64,6 +65,17 @@ from alf.utils import common
 from alf.utils.per_process_context import PerProcessContext
 import alf.utils.external_configurables
 from alf.trainers import policy_trainer
+
+ray.init(
+    # this is for ray 0.8.4
+    # If true, then output from all of the worker processes on all nodes will be directed to the driver.
+    log_to_driver=True,
+    logging_level=logging.INFO,
+    webui_host='127.0.0.1',
+    # Need to set redis memory and object_store_memory. Not sure why.
+    redis_max_memory=1073741824,  # 1g
+    object_store_memory=1073741824  # 1g
+)
 
 
 def _define_flags():

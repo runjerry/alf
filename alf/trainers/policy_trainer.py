@@ -18,6 +18,7 @@ from absl import logging
 import math
 import os
 import pprint
+import ray
 import signal
 import sys
 import time
@@ -31,12 +32,14 @@ from alf.algorithms.data_transformer import create_data_transformer
 from alf.data_structures import StepType
 from alf.environments.utils import create_environment
 from alf.nest import map_structure
+from alf.nest.utils import convert_device
 from alf.tensor_specs import TensorSpec
 from alf.utils import common
 from alf.utils import git_utils
 from alf.utils import math_ops
 from alf.utils.checkpoint_utils import Checkpointer
 import alf.utils.datagen as datagen
+from alf.utils.ray_utils import RemoteAlgorithmEvaluator
 from alf.utils.summary_utils import record_time
 from alf.utils.video_recorder import VideoRecorder
 
@@ -114,6 +117,9 @@ class Trainer(object):
 
         self._evaluate = config.evaluate
         self._eval_uncertainty = config.eval_uncertainty
+
+        ## for remote_eval
+        self._remote_eval = config.remote_eval
 
         if config.num_evals is not None:
             self._eval_interval = common.compute_summary_or_eval_interval(
@@ -389,6 +395,10 @@ class RLTrainer(Trainer):
             self._eval_summary_writer = alf.summary.create_summary_writer(
                 self._eval_dir, flush_secs=config.summaries_flush_secs)
 
+            ## for remote_eval
+            if self._remote_eval:
+                self._init_remote_evaluator()
+
     def _close_envs(self):
         """Close all envs to release their resources."""
         alf.close_env()
@@ -397,6 +407,10 @@ class RLTrainer(Trainer):
         if (self._thread_env is not None
                 and self._thread_env is not self._eval_env):
             self._thread_env.close()
+
+        ## for remote_eval
+        if self._remote_eval:
+            self._remote_evaluator.close_env.remote()
 
     def _train(self):
         env = alf.get_env()
@@ -416,10 +430,27 @@ class RLTrainer(Trainer):
         else:
             time_to_checkpoint = self._trainer_progress._env_steps + checkpoint_interval
 
+        remote_eval_run = False
         while True:
             t0 = time.time()
             with record_time("time/train_iter"):
                 train_steps = self._algorithm.train_iter()
+
+            ## for remote_eval
+            env_steps_metric = self._algorithm.get_step_metrics()[1]
+            total_time_steps = env_steps_metric.result()
+            if self._evaluate and (iter_num + 1) % self._eval_interval == 0 and \
+                total_time_steps >= self._config.initial_collect_steps:
+                if self._remote_eval:
+                    # wait for remote_eval to finish
+                    if remote_eval_run:
+                        self._fetch_remote_result(remote_eval_id)
+                        remote_eval_run = False
+                    remote_eval_id = self._launch_remote_eval()
+                    remote_eval_run = True
+                else:
+                    self._eval()
+
             t = time.time() - t0
             logging.log_every_n_seconds(
                 logging.INFO,
@@ -430,8 +461,10 @@ class RLTrainer(Trainer):
                  int(train_steps) / t),
                 n_seconds=1)
 
-            if self._evaluate and (iter_num + 1) % self._eval_interval == 0:
-                self._eval()
+            ## for remote_eval
+            # if self._evaluate and (iter_num + 1) % self._eval_interval == 0:
+            #     self._eval()
+
             if iter_num == begin_iter_num:
                 self._summarize_training_setting()
 
@@ -448,7 +481,17 @@ class RLTrainer(Trainer):
                 # Evaluate before exiting so that the eval curve shown in TB
                 # will align with the final iter/env_step.
                 if self._evaluate:
-                    self._eval()
+
+                    ## fore remote_eval
+                    # self._eval()
+                    if self._remote_eval:
+                        if remote_eval_run:
+                            self._fetch_remote_result(remote_eval_id)
+                        remote_eval_id = self._launch_remote_eval()
+                        self._fetch_remote_result(remote_eval_id)
+                    else:
+                        self._eval()
+
                 break
 
             if ((self._num_iterations and iter_num >= time_to_checkpoint)
@@ -510,6 +553,39 @@ class RLTrainer(Trainer):
 
         common.log_metrics(self._eval_metrics)
         self._algorithm.train()
+
+    ## for remote_eval
+    def _init_remote_evaluator(self):
+        conf_file = common.get_conf_file()
+        self._remote_evaluator = RemoteAlgorithmEvaluator.remote(
+            self._config, conf_file)
+
+    ## for remote_eval
+    def _launch_remote_eval(self):
+        state_dict = self._algorithm.get_predict_module_state()
+        state_dict = convert_device(state_dict, device='cpu')
+        train_step = alf.summary.get_global_counter()
+        step_metrics = self._algorithm.get_step_metrics()
+        metric_names = [metric.name for metric in step_metrics]
+        metric_steps = [metric.result() for metric in step_metrics]
+        metric_steps = convert_device(metric_steps, device='cpu')
+        remote_eval_id = self._remote_evaluator.eval.remote(
+            state_dict,
+            train_step=train_step,
+            step_metrics=zip(metric_names, metric_steps))
+        return remote_eval_id
+
+    ## for remote_eval
+    def _fetch_remote_result(self, remote_id):
+        ray.get([remote_id])
+        eval_results, train_step, step_metrics = ray.get(
+            self._remote_evaluator.get_eval_results.remote())
+        eval_results = convert_device(eval_results)
+        assert len(eval_results) == len(self._eval_metrics)
+        with alf.summary.push_summary_writer(self._eval_summary_writer):
+            for metric, result in zip(self._eval_metrics, eval_results):
+                metric.gen_summaries_from_result(
+                    result, train_step=train_step, step_metrics=step_metrics)
 
 
 class SLTrainer(Trainer):

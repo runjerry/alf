@@ -16,10 +16,11 @@ from functools import partial
 import torch
 
 import alf
-from alf.algorithms.oac_algorithm import OacAlgorithm
+from alf.algorithms.oabc_algorithm import OabcAlgorithm
 from alf.nest.utils import NestConcat
-from alf.networks import NormalProjectionNetwork, ActorDistributionNetwork, CriticNetwork
+from alf.networks import NormalProjectionNetwork, ActorNetwork, CriticNetwork
 from alf.optimizers import Adam, AdamTF
+from alf.utils.dist_utils import calc_default_target_entropy
 from alf.utils.math_ops import clipped_exp
 from alf.utils.losses import element_wise_squared_loss
 
@@ -27,56 +28,53 @@ from alf.examples import sac_conf
 
 # environment config
 alf.config(
-    'create_environment',
-    env_name="HalfCheetah-v2",
-    num_parallel_environments=1)
+    'create_environment', env_name="Humanoid-v2", num_parallel_environments=1)
 
 # algorithm config
 fc_layer_params = (256, 256)
+joint_fc_layer_params = ((256, True), (256, True))
 
-actor_network_cls = partial(
-    ActorDistributionNetwork,
-    fc_layer_params=fc_layer_params,
-    continuous_projection_net_ctor=partial(
-        NormalProjectionNetwork,
-        state_dependent_std=True,
-        scale_distribution=True,
-        std_transform=clipped_exp))
+actor_network_cls = partial(ActorNetwork, fc_layer_params=fc_layer_params)
 
-critic_network_cls = partial(
-    CriticNetwork, joint_fc_layer_params=fc_layer_params)
+explorer_network_cls = partial(ActorNetwork, fc_layer_params=fc_layer_params)
 
 alf.config(
-    'OacAlgorithm',
+    'CriticDistributionParamNetwork',
+    joint_fc_layer_params=joint_fc_layer_params)
+
+alf.config('FuncParVIAlgorithm', entropy_regularization=1., num_particles=5)
+
+alf.config(
+    'OabcAlgorithm',
     actor_network_cls=actor_network_cls,
-    critic_network_cls=critic_network_cls,
-    explore=True,
-    explore_delta=6.,
+    explorer_network_cls=explorer_network_cls,
+    beta_ub=4.,
+    beta_lb=3.,
     target_update_tau=0.005,
-    use_entropy_reward=False,
+    use_parallel_network=True,
     actor_optimizer=AdamTF(lr=3e-4),
-    critic_optimizer=AdamTF(lr=3e-4),
-    alpha_optimizer=AdamTF(lr=3e-4))
+    explorer_optimizer=AdamTF(lr=3e-4),
+    critic_optimizer=Adam(lr=3e-4, weight_decay=1e-4))
 
 alf.config('OneStepTDLoss', td_error_loss_fn=element_wise_squared_loss)
 
 # training config
-alf.config('Agent', rl_algorithm_cls=OacAlgorithm)
+alf.config('Agent', rl_algorithm_cls=OabcAlgorithm)
 
 alf.config(
     'TrainerConfig',
     initial_collect_steps=10000,
     mini_batch_length=2,
-    unroll_length=1,
+    unroll_length=1000,
     mini_batch_size=256,
-    num_updates_per_train_iter=1,
-    num_iterations=2500000,
+    num_updates_per_train_iter=1000,
+    num_iterations=2500,
     num_checkpoints=1,
     evaluate=True,
-    eval_interval=1000,
+    eval_interval=10,
     num_eval_episodes=5,
     debug_summaries=True,
     random_seed=0,
     summarize_grads_and_vars=True,
-    summary_interval=1000,
+    summary_interval=1,
     replay_buffer_length=1000000)

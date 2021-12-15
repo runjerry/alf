@@ -16,10 +16,11 @@ from functools import partial
 import torch
 
 import alf
-from alf.algorithms.oac_algorithm import OacAlgorithm
+from alf.algorithms.oabc_algorithm import OabcAlgorithm
 from alf.nest.utils import NestConcat
-from alf.networks import NormalProjectionNetwork, ActorDistributionNetwork, CriticNetwork
+from alf.networks import NormalProjectionNetwork, ActorNetwork, ActorDistributionNetwork
 from alf.optimizers import Adam, AdamTF
+from alf.utils.dist_utils import calc_default_target_entropy
 from alf.utils.math_ops import clipped_exp
 from alf.utils.losses import element_wise_squared_loss
 
@@ -33,6 +34,7 @@ alf.config(
 
 # algorithm config
 fc_layer_params = (256, 256)
+joint_fc_layer_params = ((256, True), (256, True))
 
 actor_network_cls = partial(
     ActorDistributionNetwork,
@@ -43,25 +45,43 @@ actor_network_cls = partial(
         scale_distribution=True,
         std_transform=clipped_exp))
 
-critic_network_cls = partial(
-    CriticNetwork, joint_fc_layer_params=fc_layer_params)
+# explore_network_cls = partial(
+#     ActorDistributionNetwork,
+#     fc_layer_params=fc_layer_params,
+#     continuous_projection_net_ctor=partial(
+#         NormalProjectionNetwork,
+#         state_dependent_std=True,
+#         scale_distribution=True,
+#         std_transform=clipped_exp))
+
+explore_network_cls = partial(ActorNetwork, fc_layer_params=fc_layer_params)
 
 alf.config(
-    'OacAlgorithm',
+    'CriticDistributionParamNetwork',
+    joint_fc_layer_params=joint_fc_layer_params)
+
+alf.config('FuncParVIAlgorithm', num_particles=10)
+
+alf.config(
+    'OabcAlgorithm',
     actor_network_cls=actor_network_cls,
-    critic_network_cls=critic_network_cls,
-    explore=True,
-    explore_delta=6.,
-    target_update_tau=0.005,
+    explore_network_cls=explore_network_cls,
+    beta_ub=1.,
+    beta_lb=1.,
+    # entropy_regularization_weight=1.,
+    deterministic_critic=False,
     use_entropy_reward=False,
+    target_update_tau=0.005,
     actor_optimizer=AdamTF(lr=3e-4),
-    critic_optimizer=AdamTF(lr=3e-4),
-    alpha_optimizer=AdamTF(lr=3e-4))
+    explore_optimizer=AdamTF(lr=3e-4),
+    critic_optimizer=Adam(lr=3e-4),  #, weight_decay=1e-4),
+    alpha_optimizer=AdamTF(lr=3e-4),
+    explore_alpha_optimizer=AdamTF(lr=3e-4))
 
 alf.config('OneStepTDLoss', td_error_loss_fn=element_wise_squared_loss)
 
 # training config
-alf.config('Agent', rl_algorithm_cls=OacAlgorithm)
+alf.config('Agent', rl_algorithm_cls=OabcAlgorithm)
 
 alf.config(
     'TrainerConfig',
@@ -73,6 +93,7 @@ alf.config(
     num_iterations=2500000,
     num_checkpoints=1,
     evaluate=True,
+    remote_eval=True,
     eval_interval=1000,
     num_eval_episodes=5,
     debug_summaries=True,

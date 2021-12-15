@@ -828,7 +828,7 @@ def compute_log_probability(distributions, actions):
     return total_log_probs
 
 
-def rsample_action_distribution(nested_distributions):
+def rsample_action_distribution(nested_distributions, size=[]):
     """Sample actions from distributions with reparameterization-based sampling.
 
     It uses ``Distribution.rsample()`` to do the sampling to enable backpropagation.
@@ -842,7 +842,7 @@ def rsample_action_distribution(nested_distributions):
                 nested_distributions))), \
             ("all the distributions need to support rsample in order to enable "
             "backpropagation")
-    return nest.map_structure(lambda d: d.rsample(), nested_distributions)
+    return nest.map_structure(lambda d: d.rsample(size), nested_distributions)
 
 
 def sample_action_distribution(nested_distributions):
