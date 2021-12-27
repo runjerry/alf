@@ -164,13 +164,20 @@ class _Sequential(Network):
         # pytorch nn.Moddule needs to use ModuleList to keep track of parameters
         self._nets = nn.ModuleList(
             filter(lambda m: isinstance(m, nn.Module), modules))
-        if simple:
-            self.forward = self._forward_simple
-        else:
-            self.forward = self._forward_complex
+        self._simple = simple
+        # if simple:
+        #     self.forward = self._forward_simple
+        # else:
+        #     self.forward = self._forward_complex
         self._output = output
         self._inputs = inputs
         self._outputs = outputs
+
+    def forward(self, input, state=()):
+        if self._simple:
+            return self._forward_simple(input, state=state)
+        else:
+            return self._forward_complex(input, state=state)
 
     def _forward_simple(self, input, state=()):
         x = input

@@ -2774,6 +2774,72 @@ class Sum(nn.Module):
         return Sum(self._dim)
 
 
+class Cumsum(nn.Module):
+    """Cumulatively sum over given dimension(s).
+
+    Note that batch dimention is not counted for dim. This means that
+    dim=0 means the dimension after batch dimension.
+    """
+
+    def __init__(self, dim):
+        """
+        Args:
+            dim (int|tuple[int]): the dimension(s) to be cumulatively summed.
+        """
+        super().__init__()
+        dim = alf.nest.map_structure(lambda d: d + 1 if d >= 0 else d, dim)
+        self._dim = dim
+
+    def forward(self, input):
+        return input.cumsum(dim=self._dim)
+
+    def make_parallel(self, n: int):
+        """Create a Cumsum layer to handle parallel batch.
+
+        It is assumed that a parallel batch has shape [B, n, ...] and both the
+        batch dimension and replica dimension are not counted for ``dim``
+
+        Args:
+            n (int): the number of replicas.
+        Returns:
+            a ``Cumum`` layer to handle parallel batch.
+        """
+        return Cumsum(self._dim)
+
+
+class Softmax(nn.Module):
+    """Compute softmax over given dimension(s).
+
+    Note that batch dimention is not counted for dim. This means that
+    dim=0 means the dimension after batch dimension.
+    """
+
+    def __init__(self, dim):
+        """
+        Args:
+            dim (int|tuple[int]): the dimension(s) to be cumulatively summed.
+        """
+        super().__init__()
+        dim = alf.nest.map_structure(lambda d: d + 1 if d >= 0 else d, dim)
+        self._dim = dim
+
+    def forward(self, input):
+        return F.softmax(input, dim=self._dim)
+
+    def make_parallel(self, n: int):
+        """Create a Softmax layer to handle parallel batch.
+
+        It is assumed that a parallel batch has shape [B, n, ...] and both the
+        batch dimension and replica dimension are not counted for ``dim``
+
+        Args:
+            n (int): the number of replicas.
+        Returns:
+            a ``Cumum`` layer to handle parallel batch.
+        """
+        return Softmax(self._dim)
+
+
 class AddN(nn.Module):
     """Add several tensors"""
 

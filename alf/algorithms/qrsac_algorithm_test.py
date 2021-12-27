@@ -66,6 +66,7 @@ class QRSACAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
         reward_spec = env._reward_spec
 
         fc_layer_params = (10, 10)
+        critic_fc_layer_params = (10, 20)
 
         continuous_projection_net_ctor = partial(
             alf.nn.NormalProjectionNetwork,
@@ -78,12 +79,21 @@ class QRSACAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
             fc_layer_params=fc_layer_params,
             continuous_projection_net_ctor=continuous_projection_net_ctor)
 
-        num_quantiles = 50
-        critic_network = partial(
-            alf.nn.CriticNetwork,
-            output_tensor_spec=TensorSpec((num_quantiles, )),
-            joint_fc_layer_params=fc_layer_params,
-            use_naive_parallel_network=use_naive_parallel_network)
+        num_quantiles = 100
+
+        # critic_network = partial(
+        #     alf.nn.CriticNetwork,
+        #     output_tensor_spec=TensorSpec((num_quantiles, )),
+        #     joint_fc_layer_params=fc_layer_params,
+        #     use_naive_parallel_network=use_naive_parallel_network)
+
+        def critic_network(input_tensor_spec):
+            return alf.nn.Sequential(
+                alf.nn.CriticNetwork(
+                    input_tensor_spec,
+                    joint_fc_layer_params=critic_fc_layer_params,
+                    output_tensor_spec=TensorSpec((num_quantiles, ))),
+                alf.layers.Softmax(dim=-1), alf.layers.Cumsum(dim=-1))
 
         if use_n_step_td:
             td_qr_loss_ctor = TDQRLoss

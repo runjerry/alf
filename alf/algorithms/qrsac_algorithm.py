@@ -30,6 +30,7 @@ from alf.networks import ActorDistributionNetwork, CriticNetwork
 from alf.networks import QNetwork
 from alf.tensor_specs import TensorSpec, BoundedTensorSpec
 from alf.utils import dist_utils
+from alf.utils.summary_utils import safe_mean_hist_summary
 
 
 @alf.configurable
@@ -182,6 +183,14 @@ class QrsacAlgorithm(SacAlgorithm):
             quantile_mean=False)
 
         target_critic = target_critics.detach()
+
+        if self._debug_summaries and alf.summary.should_record_summaries():
+            with alf.summary.scope(self._name):
+                for i in range(self._num_critic_replicas):
+                    safe_mean_hist_summary("critic_quantile_mean_" + str(i),
+                                           critics.mean(-1)[..., i])
+                safe_mean_hist_summary("target_critic_quantile_mean",
+                                       target_critic.mean(-1))
 
         state = SacCriticState(
             critics=critics_state, target_critics=target_critics_state)

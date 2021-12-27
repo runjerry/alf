@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import torch
 import torch.nn as nn
 from typing import Union, List, Callable
@@ -306,20 +307,27 @@ class TDQRLoss(TDLoss):
             mask = info.step_type[:-1] != StepType.LAST
             with alf.summary.scope(self._name):
 
-                def _summarize(v, r, d, suffix):
+                def _summarize(v, r, d, n, suffix):
                     cdf = (d <= 0).float().mean(-2)
                     mean_cdf = cdf.mean(0).mean(0)
-                    alf.summary.histogram(
-                        "explained_cdf_of_return_by_value_quantile" + suffix,
-                        mean_cdf)
+                    alf.summary.scalar(
+                        "explained_0.25_fraction_of_value_by_returns" + suffix,
+                        mean_cdf[math.ceil(0.25 * n) - 1])
+                    alf.summary.scalar(
+                        "explained_0.5_fraction_of_value_by_returns" + suffix,
+                        mean_cdf[math.ceil(0.5 * n) - 1])
+                    alf.summary.scalar(
+                        "explained_0.75_fraction_of_value_by_returns" + suffix,
+                        mean_cdf[math.ceil(0.75 * n) - 1])
 
                 if value.ndim == 3:
-                    _summarize(value, returns, diff, '')
+                    _summarize(value, returns, diff, self._num_quantiles, '')
                 else:
                     for i in range(value.shape[-2]):
                         suffix = '/' + str(i)
                         _summarize(value[..., i, :], returns[..., i, :],
-                                   diff[..., i, :, :], suffix)
+                                   diff[..., i, :, :], self._num_quantiles,
+                                   suffix)
 
         huber_loss = self._td_error_loss_fn(diff)
         loss = torch.abs(
