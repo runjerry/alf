@@ -52,6 +52,7 @@ class ParVIAlgorithm(Algorithm):
                  num_particles=10,
                  entropy_regularization=1.,
                  par_vi="gfsf",
+                 use_kernel_averager=False,
                  critic_input_dim=None,
                  critic_hidden_layers=(100, 100),
                  critic_l2_weight=10.,
@@ -75,6 +76,8 @@ class ParVIAlgorithm(Algorithm):
                   involves a kernel matrix inversion, so computationally more
                   expensive, but in some cases the convergence seems faster
                   than svgd approaches.
+            use_kernel_averager (bool): whether or not to use a running 
+                average of the kernel bandwith for ParVI methods. 
             critic_input_dim (int): dimension of critic input, used for ``minmax``.
             critic_hidden_layers (tuple): sizes of hidden layers of the critic,
                 used for ``minmax``.
@@ -119,8 +122,11 @@ class ParVIAlgorithm(Algorithm):
         else:
             raise ValueError("Unsupported par_vi method: %s" % par_vi)
 
-        self._kernel_width_averager = AdaptiveAverager(
-            tensor_spec=TensorSpec(shape=()))
+        if use_kernel_averager:
+            self._kernel_width_averager = AdaptiveAverager(
+                tensor_spec=TensorSpec(shape=()))
+        else:
+            self._kernel_width_averager = None
 
         self._particles = torch.nn.Parameter(
             torch.randn(num_particles, particle_dim, requires_grad=True))
@@ -196,10 +202,15 @@ class ParVIAlgorithm(Algorithm):
             dist = torch.sum(dist, dim=-1)
             assert dist.ndim == 1, "dist must have dimension 1 or 2."
         width, _ = torch.median(dist, dim=0)
-        width = width / np.log(len(dist))
-        self._kernel_width_averager.update(width)
+        if width == 0.:
+            width = torch.ones_like(width)
+        else:
+            width = width / max(np.log(len(dist)), 1.)
+        if self._kernel_width_averager is not None:
+            self._kernel_width_averager.update(width)
+            width = self._kernel_width_averager.get()
 
-        return self._kernel_width_averager.get()
+        return width
 
     def _rbf_func(self, x, y=None):
         r"""
@@ -225,12 +236,7 @@ class ParVIAlgorithm(Algorithm):
             assert Dx == Dy
         diff = x.unsqueeze(1) - y.unsqueeze(0)  # [Nx, Ny, W]
         dist_sq = torch.sum(diff**2, -1)  # [Nx, Ny]
-        h, _ = torch.median(dist_sq.view(-1), dim=0)
-        if h == 0.:
-            h = torch.ones_like(h)
-        else:
-            h = h / max(np.log(Nx), 1.)
-
+        h = self._kernel_width(dist_sq)
         kappa = torch.exp(-dist_sq / h)  # [Nx, Ny]
         kappa_grad = -2 * kappa.unsqueeze(-1) * diff / h  # [Nx, Ny, W]
         return kappa, kappa_grad
