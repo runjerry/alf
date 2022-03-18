@@ -266,21 +266,24 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
             raise ValueError("Unsupported loss_type: %s" % loss_type)
 
     def set_data_loader(self,
-                        train_loader,
+                        train_loaders,
                         test_loader=None,
                         outlier_data_loaders=None,
                         entropy_regularization=None):
         """Set data loadder for training and testing.
 
         Args:
-            train_loader (torch.utils.data.DataLoader): training data loader
+            train_loaders (torch.utils.data.DataLoader|list): training data loader
+                or list of train data loaders
             test_loader (torch.utils.data.DataLoader): testing data loader
             outlier_data_loaders (tuple[torch.utils.data.DataLoader):
                 (trainloader, testloader) for outlier datasets
             entropy_regularization (float): weight of particle VI repulsive
                 term.
         """
-        self._train_loader = train_loader
+        if isinstance(train_loaders, list):
+            assert len(train_loaders) == self.num_particles
+        self._train_loaders = train_loaders
         self._test_loader = test_loader
         if entropy_regularization is not None:
             self._entropy_regularization = entropy_regularization
@@ -324,16 +327,31 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
             mini_batch number
         """
 
-        assert self._train_loader is not None, "Must set data_loader first."
+        assert self._train_loaders is not None, "Must set data_loader first."
         alf.summary.increment_global_counter()
         with record_time("time/train"):
             loss = 0.
             if self._loss_type == 'classification':
                 avg_acc = []
-            for batch_idx, (data, target) in enumerate(self._train_loader):
-                data = data.to(alf.get_default_device())
-                target = target.to(alf.get_default_device())
-                alg_step = self.train_step((data, target), state=state)
+
+            for batch_idx, train_data in enumerate(zip(*self._train_loaders)):
+                features = []
+                targets = []
+                for i in range(len(train_data)):
+                    data, target = train_data[i]
+                    data = data.to(alf.get_default_device())
+                    target = target.to(alf.get_default_device())
+                    features.append(data)
+                    targets.append(target)
+                features = torch.stack(features, dim=1)
+                targets = torch.stack(targets, dim=1)
+                alg_step = self.train_step((features, targets), state=state)
+
+                # for batch_idx, (data, target) in enumerate(self._train_loaders):
+                #     data = data.to(alf.get_default_device())
+                #     target = target.to(alf.get_default_device())
+                #     alg_step = self.train_step((data, target), state=state)
+
                 loss_info, params = self.update_with_gradient(alg_step.info)
                 loss += loss_info.extra.loss
                 if self._loss_type == 'classification':
@@ -443,9 +461,10 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
         """
         num_particles = outputs.shape[0]
         if self._loss_type == 'regression':
-            # [B, D] -> [B, N, D]
-            targets = _expand_to_replica(targets, num_particles,
-                                         self._param_net.output_spec)
+            if targets.ndim == 2:
+                # [B, D] -> [B, N, D]
+                targets = _expand_to_replica(targets, num_particles,
+                                             self._param_net.output_spec)
             # [B, N, D] -> [N, B, D]
             targets = targets.permute(1, 0, 2)
             # [N, B, D] -> [N, -1]

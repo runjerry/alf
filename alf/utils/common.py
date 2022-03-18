@@ -827,9 +827,9 @@ def set_random_seed(seed):
     if seed is None:
         seed = int(np.uint32(hash(str(os.getpid()) + '|' + str(time.time()))))
     else:
-        torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        torch.use_deterministic_algorithms(True)
+        # torch.use_deterministic_algorithms(True)
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
