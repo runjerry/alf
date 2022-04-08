@@ -60,9 +60,9 @@ class FuncParVIAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
 
     @parameterized.parameters(
         ('svgd', False),
-        ('gfsf', False),
-        ('svgd', True),
-        ('gfsf', True),
+        # ('gfsf', False),
+        # ('svgd', True),
+        # ('gfsf', True),
         # TODO: after fixing stochastic ParVI, ``minmax`` test is too slow
         # ('minmax', False),
     )

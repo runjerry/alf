@@ -313,12 +313,12 @@ class ParVIAlgorithm(Algorithm):
         # [N, N], [N, N, D]
         kernel_weight, kernel_grad = self._rbf_func(extra_particles.detach())
 
-        kernel_logp = torch.matmul(kernel_weight, loss_grad) / (
-            self.num_particles)  # [N, D]
-
-        # kernel_weight.fill_diagonal_(0.6)
         # kernel_logp = torch.matmul(kernel_weight, loss_grad) / (
-        #     self.num_particles - 1)  # [N, D]
+        #     self.num_particles)  # [N, D]
+
+        kernel_weight.fill_diagonal_(0.5)
+        kernel_logp = torch.matmul(kernel_weight, loss_grad) / (
+            self.num_particles - 1)  # [N, D]
 
         loss_prop_kernel_logp = torch.sum(
             kernel_logp.detach() * particles, dim=-1)

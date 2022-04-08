@@ -840,12 +840,16 @@ class Generator(Algorithm):
             aug_outputs = torch.cat([outputs, extra_outputs], dim=-1)
         else:
             aug_outputs = outputs
-        num_particles = outputs.shape[0] // 2
-        outputs_i, outputs_j = torch.split(outputs, num_particles, dim=0)
-        aug_outputs_i, aug_outputs_j = torch.split(
-            aug_outputs, num_particles, dim=0)
 
-        loss_inputs = outputs_j
+        # num_particles = outputs.shape[0] // 2
+        # outputs_i, outputs_j = torch.split(outputs, num_particles, dim=0)
+        # aug_outputs_i, aug_outputs_j = torch.split(
+        #     aug_outputs, num_particles, dim=0)
+        # loss_inputs = outputs_j
+
+        loss_inputs = outputs
+        num_particles = outputs.shape[0]
+
         loss = loss_func(loss_inputs)
         if isinstance(loss, tuple):
             neglogp = loss.loss
@@ -855,17 +859,32 @@ class Generator(Algorithm):
                                         loss_inputs)[0]  # [Nj, D]
 
         # [Nj, Ni], [Nj, Ni, D']
-        kernel_weight, kernel_grad = self._rbf_func2(aug_outputs_j.detach(),
-                                                     aug_outputs_i.detach())
-        kernel_logp = torch.matmul(kernel_weight.t(),
-                                   loss_grad) / num_particles  # [Ni, D]
+
+        # kernel_weight, kernel_grad = self._rbf_func2(aug_outputs_j.detach(),
+        #                                              aug_outputs_i.detach())
+        # kernel_logp = torch.matmul(kernel_weight.t(),
+        #                            loss_grad) / num_particles  # [Ni, D]
+
+        kernel_weight, kernel_grad = self._rbf_func2(aug_outputs.detach(),
+                                                     aug_outputs.detach())
+        kernel_weight.fill_diagonal_(0.)
+        kernel_logp = torch.matmul(kernel_weight, loss_grad) / (
+            num_particles - 1)  # [N, D]
+
+        # loss_prop_kernel_logp = torch.sum(
+        #     kernel_logp.detach() * outputs_i, dim=-1)
+        # loss_prop_kernel_grad = torch.sum(
+        #     -entropy_regularization * kernel_grad.mean(0).detach() *
+        #     aug_outputs_i,
+        #     dim=-1)
 
         loss_prop_kernel_logp = torch.sum(
-            kernel_logp.detach() * outputs_i, dim=-1)
+            kernel_logp.detach() * outputs, dim=-1)
+        kernel_grad = kernel_grad.sum(0) / (num_particles - 1)
         loss_prop_kernel_grad = torch.sum(
-            -entropy_regularization * kernel_grad.mean(0).detach() *
-            aug_outputs_i,
+            -entropy_regularization * kernel_grad.detach() * aug_outputs,
             dim=-1)
+
         loss_propagated = loss_prop_kernel_logp + loss_prop_kernel_grad
 
         return loss, loss_propagated
