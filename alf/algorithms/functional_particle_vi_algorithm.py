@@ -177,7 +177,7 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
             voting (str): types of voting results from sampled functions,
                 types are [``soft``, ``hard``]
             par_vi (str): types of particle-based methods for variational inference,
-                types are [``svgd``, ``gfsf``, ``minmax``]
+                types are [``svgd``, ``gfsf``, ``spos``, ``minmax``]
 
                 * svgd: empirical expectation of SVGD is evaluated by reusing
                   the same batch of particles.
@@ -185,6 +185,8 @@ class FuncParVIAlgorithm(ParVIAlgorithm):
                   involves a kernel matrix inversion, so computationally more
                   expensive, but in some cases the convergence seems faster
                   than svgd approaches.
+                * spos: stochastic particle-optimization sampling, it is essentially
+                  a combination of SGLD and SVGD.
             self_damping (bool): whether to apply the following damping trick:
                 Ba, Jimmy, et al, "Understanding the Variance Collapse of SVGD
                 in High Dimensions." ICLR 2021.

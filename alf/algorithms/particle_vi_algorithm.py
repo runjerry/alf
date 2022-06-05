@@ -46,12 +46,17 @@ class ParVIAlgorithm(Algorithm):
 
        Liu, Chang, et al. "Understanding and accelerating particle-based
        variational inference." International Conference on Machine Learning. 2019.
+
+    3. Stochastic Particle-Optimization Sampling (SPOS): 
+       Zhang, Jianyi, et al. "Stochastic Particle-Optimization Sampling and 
+       the Non-Asymptotic Convergence Theory." AISTATS. 2020.
     """
 
     def __init__(self,
                  particle_dim,
                  num_particles=10,
                  entropy_regularization=1.,
+                 temp_inv=.5,
                  par_vi="gfsf",
                  self_damping=True,
                  critic_input_dim=None,
@@ -69,7 +74,9 @@ class ParVIAlgorithm(Algorithm):
             particle_dim (int): dimension of the particles.
             num_particles (int): number of particles.
             entropy_regularization (float): weight of the repulsive term in par_vi.
-            par_vi (string): par_vi methods, options are [``svgd``, ``gfsf``, ``None``],
+            temp_inv (float): the inverse of the temperature in ``spos``. 
+            par_vi (string): par_vi methods, options are [``svgd``, ``gfsf``, 
+            ``spos``, ``None``],
 
                 * svgd: empirical expectation of SVGD is evaluated by reusing
                   the same batch of particles.
@@ -77,6 +84,8 @@ class ParVIAlgorithm(Algorithm):
                   involves a kernel matrix inversion, so computationally more
                   expensive, but in some cases the convergence seems faster
                   than svgd approaches.
+                * spos: stochastic particle-optimization sampling, it is essentially
+                  a combination of SGLD and SVGD.
             self_damping (bool): whether to apply the following damping trick:
                 Ba, Jimmy, et al, "Understanding the Variance Collapse of SVGD
                 in High Dimensions." ICLR 2021.
@@ -101,13 +110,17 @@ class ParVIAlgorithm(Algorithm):
         self._num_particles = num_particles
         gamma = max(1., particle_dim / num_particles)
         self._lambda = min(1., (1 + gamma) / (gamma * math.exp(1)))
+        self._gamma = max(1., particle_dim / num_particles)
         self._entropy_regularization = entropy_regularization
+        self._temp_inv = temp_inv
         self._particles = None
         self._par_vi = par_vi
         if par_vi == 'gfsf':
             self._grad_func = self._gfsf_grad
         elif par_vi == 'svgd':
             self._grad_func = self._svgd_grad
+        elif par_vi == 'spos':
+            self._grad_func = self._spos_grad
         elif par_vi == 'minmax':
             self._grad_func = self._minmax_grad
             if critic_input_dim is None:
@@ -302,7 +315,7 @@ class ParVIAlgorithm(Algorithm):
                    transform_func=None):
         """
         Compute particle gradients via SVGD, empirical expectation
-        evaluated using the all particles.
+        evaluated using all particles.
         """
         if transform_func is not None:
             particles, extra_particles = transform_func(particles)
@@ -363,6 +376,63 @@ class ParVIAlgorithm(Algorithm):
         loss_prop_logq = torch.sum(
             -logq_grad.detach() * extra_particles, dim=-1)
         loss_propagated = loss_prop_neglogp + loss_prop_logq
+
+        return loss, loss_propagated
+
+    def _spos_grad(self,
+                   particles,
+                   loss_func,
+                   entropy_regularization,
+                   temp_inv=None,
+                   transform_func=None):
+        """
+        Compute particle gradients via spos, empirical expectation
+        evaluated using all particles.
+        """
+        if temp_inv is None:
+            temp_inv = self._temp_inv
+        if transform_func is not None:
+            particles, extra_particles = transform_func(particles)
+        else:
+            extra_particles = particles
+        loss_inputs = particles
+        loss = loss_func(loss_inputs)
+        if isinstance(loss, tuple):
+            neglogp = loss.loss
+        else:
+            neglogp = loss
+        loss_grad = torch.autograd.grad(neglogp.sum(),
+                                        loss_inputs)[0]  # [N, D]
+
+        # [N, N], [N, N, D]
+        kernel_weight, kernel_grad = self._rbf_func(extra_particles.detach())
+
+        kernel_logp = torch.matmul(kernel_weight, loss_grad) / (
+            self.num_particles)  # [N, D]
+
+        # kernel_weight.fill_diagonal_(0.6)
+        # kernel_logp = torch.matmul(kernel_weight, loss_grad) / (
+        #     self.num_particles - 1)  # [N, D]
+
+        likelihood_grad = torch.sum(
+            (temp_inv * loss_grad + kernel_logp).detach() * particles, dim=-1)
+        # likelihood_grad = torch.sum(
+        #     kernel_logp.detach() * particles, dim=-1)
+        # loss_prop_kernel_logp = torch.sum(
+        #     kernel_logp.detach() * particles, dim=-1)
+
+        kernel_grad = kernel_grad.sum(0) / (self.num_particles - 1)  # [N, D]
+        repulsive_grad = torch.sum(
+            -entropy_regularization * kernel_grad.detach() * extra_particles,
+            dim=-1)
+
+        diffuse_grad = torch.sum(
+            -math.sqrt(2 * temp_inv) * torch.randn_like(loss_grad) * particles,
+            dim=-1)
+
+        loss_propagated = likelihood_grad + repulsive_grad + diffuse_grad
+        # loss_propagated = likelihood_grad + repulsive_grad + diffuse_grad
+        # loss_propagated = loss_prop_kernel_logp + loss_prop_kernel_grad
 
         return loss, loss_propagated
 

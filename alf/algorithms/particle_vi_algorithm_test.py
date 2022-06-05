@@ -57,9 +57,9 @@ class ParVIAlgorithmTest(parameterized.TestCase, alf.test.TestCase):
         x -= torch.mean(x, dim=1, keepdim=True)
         return fact * x.matmul(x.t()).squeeze()
 
-    @parameterized.parameters(('svgd'), ('svgd', True),
-                              ('gfsf'))  #, ('minmax'))
-    def test_par_vi_algorithm(self, par_vi='svgd', self_damping=False):
+    # @parameterized.parameters(('svgd'), ('svgd', True),
+    #                           ('gfsf'))  #, ('minmax'))
+    def test_par_vi_algorithm(self, par_vi='spos', self_damping=False):
         """
         The par_vi algorithm is trained to match the likelihood of a Gaussian
         distribution with zero mean and diagonal variance :math:`(1, 4)`.
