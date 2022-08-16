@@ -79,10 +79,15 @@ class RandomSpace(Subspace):
 
 @Subspace.register_subclass('covariance')
 class CovarianceSpace(Subspace):
-    def __init__(self, num_parameters, var_clamp=1e-6, max_rank=20):
+    def __init__(self,
+                 num_parameters,
+                 use_subspace_mean=True,
+                 var_clamp=1e-6,
+                 max_rank=20):
         super(CovarianceSpace, self).__init__()
 
         self._num_parameters = num_parameters
+        self._use_subspace_mean = use_subspace_mean
         self._var_clamp = var_clamp
         self._max_rank = max_rank
 
@@ -115,9 +120,9 @@ class CovarianceSpace(Subspace):
         return self.mean, self.variance, self.cov_factor
 
     def sample(self, n_sample, scale=0.5, diag_noise=True):
-        if n_sample == 1:
+        if n_sample == 1 and self._use_subspace_mean:
             return self.mean.view(1, -1)  # [1, n_params]
-        elif n_sample > 1:
+        elif n_sample >= 1:
             eps_low_rank = torch.randn(
                 n_sample, self.cov_factor.shape[0])  # [n_sample, n_rank]
             z = eps_low_rank @ self.cov_factor  # [n_sample, n_params]
